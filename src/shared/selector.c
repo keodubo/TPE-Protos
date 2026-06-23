@@ -50,7 +50,7 @@ selector_error(const selector_status status) {
 
 static void
 wake_handler(const int signal) {
-    // nada que hacer. está solo para interrumpir el select
+    (void) signal;   // sólo interrumpe el pselect; nada que hacer
 }
 
 // señal a usar para las notificaciones de resolución
@@ -345,7 +345,7 @@ selector_register(fd_selector        s,
     }
     // 1. tenemos espacio?
     size_t ufd = (size_t)fd;
-    if(ufd > s->fd_size) {
+    if(ufd >= s->fd_size) {
         ret = ensure_capacity(s, ufd);
         if(SELECTOR_SUCCESS != ret) {
             goto finally;
@@ -580,7 +580,7 @@ finally:
 int
 selector_fd_set_nio(const int fd) {
     int ret = 0;
-    int flags = fcntl(fd, F_GETFD, 0);
+    int flags = fcntl(fd, F_GETFL, 0);
     if(flags == -1) {
         ret = -1;
     } else {

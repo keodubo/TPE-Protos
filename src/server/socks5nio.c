@@ -170,6 +170,10 @@ socksv5_passive_accept(struct selector_key *key) {
     const int client = accept(key->fd, (struct sockaddr *) &client_addr,
                               &client_addr_len);
     if (client == -1) {
+        // sin conexión lista o interrumpido por señal: no es un error fatal
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return;
+        }
         goto fail;
     }
     if (selector_fd_set_nio(client) == -1) {
@@ -284,8 +288,8 @@ hello_read(struct selector_key *key) {
         }
     } else if (n == 0) {
         ret = ERROR;   // el cliente cerró antes de completar el saludo
-    } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-        ret = ERROR;
+    } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+        ret = ERROR;   // EINTR: señal; mantenemos estado y reintentamos luego
     }
     return error ? ERROR : ret;
 }
@@ -306,8 +310,8 @@ hello_write(struct selector_key *key) {
             //          (set_interest OP_READ). Por ahora cerramos.
             ret = DONE;
         }
-    } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-        ret = ERROR;
+    } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+        ret = ERROR;   // EINTR: señal; mantenemos estado y reintentamos luego
     }
     return ret;
 }
@@ -357,7 +361,18 @@ socksv5_write(struct selector_key *key) {
 
 static void
 socksv5_close(struct selector_key *key) {
-    socks5_destroy(ATTACHMENT(key));
+    // El cierre del fd se centraliza en handle_close: así también se cierran
+    // los fds de conexiones activas durante el apagado (selector_destroy ->
+    // selector_unregister_fd -> handle_close), evitando fugas. socksv5_done
+    // sólo desregistra; el close() real ocurre acá, una sola vez por fd.
+    struct socks5 *s = ATTACHMENT(key);
+    if (key->fd == s->client_fd) {
+        s->client_fd = -1;
+    } else if (key->fd == s->origin_fd) {
+        s->origin_fd = -1;
+    }
+    close(key->fd);
+    socks5_destroy(s);
 }
 
 static void
@@ -369,10 +384,10 @@ socksv5_done(struct selector_key *key) {
     };
     for (unsigned i = 0; i < N(fds); i++) {
         if (fds[i] != -1) {
+            // unregister dispara handle_close (socksv5_close), que cierra el fd
             if (selector_unregister_fd(key->s, fds[i]) != SELECTOR_SUCCESS) {
                 abort();
             }
-            close(fds[i]);
         }
     }
 }

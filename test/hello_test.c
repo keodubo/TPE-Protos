@@ -136,6 +136,28 @@ int main(void) {
         CHECK(cnt == 2 && p[0] == 0x05 && p[1] == 0xFF, "6: respuesta rechazo = 05 FF");
     }
 
+    /* --- 7: tras terminar, hello_consume NO consume bytes extra ---
+       (pipelining: si el cliente manda el saludo + el primer byte de AUTH
+        juntos, ese byte debe sobrevivir para M2). */
+    {
+        struct rec r = { .selected = SOCKS_HELLO_NO_ACCEPTABLE_METHODS };
+        struct hello_parser p = mk(&r);
+        uint8_t raw[16]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t greet[] = { 0x05, 0x01, 0x02, 0xAB };  /* saludo + 1 byte extra */
+        fill(&b, greet, sizeof(greet));
+        bool err = false;
+        enum hello_state st = hello_consume(&b, &p, &err);
+        CHECK(hello_is_done(st, &err) && !err, "7: primer consume termina");
+        CHECK(buffer_can_read(&b), "7: el byte extra sigue en el buffer");
+        /* segundo consume con el parser ya en estado final:
+           NO debe tocar el byte extra. */
+        enum hello_state st2 = hello_consume(&b, &p, &err);
+        CHECK(hello_is_done(st2, &err), "7: segundo consume sigue en final");
+        CHECK(buffer_can_read(&b), "7: el byte extra NO fue consumido");
+        CHECK(buffer_can_read(&b) && buffer_read(&b) == 0xAB,
+              "7: el byte preservado es 0xAB");
+    }
+
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

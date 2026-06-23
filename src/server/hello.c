@@ -45,6 +45,9 @@ hello_is_done(const enum hello_state state, bool *errored) {
 enum hello_state
 hello_consume(buffer *b, struct hello_parser *p, bool *errored) {
     enum hello_state st = p->state;
+    if (hello_is_done(st, errored)) {
+        return st;   // ya en estado final: no consumir más bytes (M2: pipelining)
+    }
     while (buffer_can_read(b)) {
         const uint8_t byte = buffer_read(b);
         st = hello_parser_feed(p, byte);

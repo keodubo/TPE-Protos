@@ -40,6 +40,14 @@ test: $(TEST_HELLO) $(TEST_DBG)
 	$(TEST_HELLO)
 	$(TEST_DBG)
 
+# integración M1 sobre el socket real (levanta el server y habla SOCKS5)
+PORT?=11080
+integration: server
+	test/m1_integration.sh $(PORT)
+
+# suite completa: unitarios + integración
+check: test integration
+
 $(TEST_HELLO): test/hello_test.c src/server/hello.c src/shared/buffer.c
 	mkdir -p $(OUTPUT_FOLDER)
 	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_HELLO)
@@ -52,4 +60,4 @@ clean:
 	rm -rf $(OUTPUT_FOLDER)
 	rm -rf $(OBJECTS_FOLDER)
 
-.PHONY: all server client test clean
+.PHONY: all server client test integration check clean

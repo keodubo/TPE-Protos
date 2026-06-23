@@ -2,6 +2,8 @@
 #define SELECTOR_H_W50GNLODsARolpHbsDsrvYvMsbT
 
 #include <sys/time.h>
+#include <time.h>    // struct timespec
+#include <stddef.h>  // size_t
 #include <stdbool.h>
 
 /**

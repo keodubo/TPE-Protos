@@ -27,12 +27,12 @@
 
 #define LISTEN_BACKLOG 20
 
-static bool done = false;
+static volatile sig_atomic_t done = false;
 
 static void
 sigterm_handler(const int signal) {
-    fprintf(stdout, "señal %d recibida, cerrando...\n", signal);
-    done = true;
+    (void) signal;
+    done = true;   // async-signal-safe: sólo seteamos la bandera, no logueamos
 }
 
 /** crea, bindea y pone a escuchar un socket pasivo TCP IPv4 no bloqueante */
@@ -120,6 +120,7 @@ main(const int argc, char **argv) {
             goto finally;
         }
     }
+    fprintf(stdout, "señal recibida, cerrando...\n");   // log fuera del handler
 
     int ret = 0;
 finally:
