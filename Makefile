@@ -35,15 +35,27 @@ obj/%.o: src/%.c
 # tests unitarios (harness plano en C, sin libcheck)
 TEST_HELLO=$(OUTPUT_FOLDER)/hello_test
 TEST_DBG=$(OUTPUT_FOLDER)/dbg_test
+TEST_AUTH=$(OUTPUT_FOLDER)/auth_test
+TEST_USERS=$(OUTPUT_FOLDER)/users_test
 
-test: $(TEST_HELLO) $(TEST_DBG)
+test: $(TEST_HELLO) $(TEST_DBG) $(TEST_AUTH) $(TEST_USERS)
 	$(TEST_HELLO)
 	$(TEST_DBG)
+	$(TEST_AUTH)
+	$(TEST_USERS)
 
-# integración M1 sobre el socket real (levanta el server y habla SOCKS5)
+$(TEST_AUTH): test/auth_test.c src/server/auth.c src/shared/buffer.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_AUTH)
+
+$(TEST_USERS): test/users_test.c src/server/users.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_USERS)
+
+# integración sobre el socket real (levanta el server y habla SOCKS5)
 PORT?=11080
 integration: server
-	test/m1_integration.sh $(PORT)
+	@for t in test/*_integration.sh; do echo "--- $$t ---"; "$$t" $(PORT) || exit 1; done
 
 # suite completa: unitarios + integración
 check: test integration

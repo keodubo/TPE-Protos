@@ -1,12 +1,12 @@
 /**
  * socks5nio.c — máquina de estados de una conexión SOCKS5 (no bloqueante).
  *
- * MILESTONE M1: implementa la negociación de método (HELLO, RFC1928 §3).
+ * M1: negociación de método (HELLO, RFC1928 §3).
+ * M2: autenticación usuario/contraseña (AUTH, RFC1929).
  * Los handlers top-level (socksv5_read/write) delegan en la `stm`; cuando la
  * máquina llega a DONE o ERROR se desregistran y cierran los fds.
  *
- * Estados siguientes (M2+): tras HELLO con método USERPASS se insertará
- * AUTH_READ/AUTH_WRITE (ver TODO en hello_write).
+ * Estados siguientes (M3+): tras AUTH OK se insertará REQUEST/CONNECT.
  */
 #include <stdlib.h>   // malloc
 #include <string.h>   // memset
@@ -22,6 +22,8 @@
 #include "buffer.h"
 #include "netutils.h"
 #include "hello.h"
+#include "auth.h"
+#include "users.h"
 #include "dbg.h"
 #include "socks5nio.h"
 
@@ -31,7 +33,8 @@
 enum socks_v5state {
     HELLO_READ  = 0,   // lee y procesa el saludo del cliente
     HELLO_WRITE,       // envía la selección de método
-    // TODO M2: AUTH_READ, AUTH_WRITE
+    AUTH_READ,         // lee el sub-handshake usuario/contraseña (RFC1929)
+    AUTH_WRITE,        // envía VER STATUS de la autenticación
     // TODO M3: REQUEST_READ, REQUEST_CONNECTING, REQUEST_WRITE
     // TODO M4: COPY
     DONE,
@@ -49,6 +52,13 @@ struct hello_st {
     uint8_t              noffered;
 };
 
+/** variables de los estados AUTH_READ / AUTH_WRITE (RFC1929) */
+struct auth_st {
+    buffer              *rb, *wb;
+    struct auth_parser   parser;
+    uint8_t              status;   // 0x00 ok / 0x01 fail
+};
+
 /** una conexión SOCKS5; se aloca una vez por cliente y se reusa vía pool. */
 struct socks5 {
     int                  client_fd;
@@ -64,6 +74,7 @@ struct socks5 {
     /** estados sobre el client_fd */
     union {
         struct hello_st  hello;
+        struct auth_st   auth;
     } client;
 
     /** buffers de I/O */
@@ -87,6 +98,9 @@ static const unsigned  max_pool  = 50;
 static unsigned        conn_counter = 0;
 
 static const struct state_definition *socks5_describe_states(void);
+
+/** entrada a la autenticación desde HELLO_WRITE (definida en la sección AUTH) */
+static unsigned hello_to_auth(struct selector_key *key);
 
 static struct socks5 *
 socks5_new(const int client_fd) {
@@ -305,13 +319,119 @@ hello_write(struct selector_key *key) {
     if (n > 0) {
         buffer_read_adv(d->wb, n);
         if (!buffer_can_read(d->wb)) {
-            // respuesta enviada por completo.
-            // TODO M2: si d->method == SOCKS_HELLO_USERPASS -> AUTH_READ
-            //          (set_interest OP_READ). Por ahora cerramos.
-            ret = DONE;
+            // respuesta del HELLO enviada por completo.
+            if (d->method == SOCKS_HELLO_USERPASS) {
+                ret = hello_to_auth(key);   // RFC1929: arrancamos la autenticación
+            } else {
+                ret = DONE;                 // 0xFF NO_ACCEPTABLE: cerrar (RFC1928 §3)
+            }
         }
     } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
         ret = ERROR;   // EINTR: señal; mantenemos estado y reintentamos luego
+    }
+    return ret;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// AUTH (sub-handshake usuario/contraseña, RFC1929)
+
+/** valida credenciales, serializa la respuesta y pasa a AUTH_WRITE */
+static unsigned
+auth_process(struct auth_st *d, struct selector_key *key) {
+    const bool ok = users_validate(d->parser.uname, d->parser.passwd);
+    d->status = ok ? AUTH_STATUS_OK : AUTH_STATUS_FAIL;
+    DBG("[conn #%u] auth: usuario '%s' -> %s", ATTACHMENT(key)->id,
+        d->parser.uname, ok ? "OK" : "RECHAZADO");
+    if (auth_marshall(d->wb, d->status) == -1
+            || selector_set_interest_key(key, OP_WRITE) != SELECTOR_SUCCESS) {
+        return ERROR;
+    }
+    return AUTH_WRITE;
+}
+
+/**
+ * Motor de AUTH_READ: PRIMERO drena lo que ya esté en read_buffer (el cliente
+ * pudo pipelinear HELLO+AUTH en un mismo segmento; el selector no re-avisa por
+ * bytes ya bufferizados), y sólo si falta hace recv. Sin esto la conexión se
+ * colgaría (no hay reaper de idle). Lo invocan tanto la transición desde HELLO
+ * como los eventos de lectura posteriores.
+ */
+static unsigned
+auth_drive(struct selector_key *key) {
+    struct auth_st *d     = &ATTACHMENT(key)->client.auth;
+    bool            error = false;
+
+    enum auth_state st = auth_consume(d->rb, &d->parser, &error);   // 1) buffer
+    if (!error && !auth_is_done(st, 0)) {                           // 2) socket
+        size_t   count;
+        uint8_t *ptr = buffer_write_ptr(d->rb, &count);
+        if (count == 0) {
+            return AUTH_READ;   // buffer lleno (defensivo): esperar, no recv(...,0)
+        }
+        const ssize_t n = recv(key->fd, ptr, count, 0);
+        if (n > 0) {
+            buffer_write_adv(d->rb, n);
+            st = auth_consume(d->rb, &d->parser, &error);
+        } else if (n == 0) {
+            return ERROR;   // el cliente cerró antes de completar
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            return ERROR;
+        }
+    }
+
+    if (error) {   // VER != 0x01 (D7.8): responder 01 01 y cerrar, uniforme con la falla
+        d->status = AUTH_STATUS_FAIL;
+        DBG("[conn #%u] auth: versión inválida -> 01 01, cierra", ATTACHMENT(key)->id);
+        if (auth_marshall(d->wb, d->status) == -1
+                || selector_set_interest_key(key, OP_WRITE) != SELECTOR_SUCCESS) {
+            return ERROR;
+        }
+        return AUTH_WRITE;
+    }
+    if (auth_is_done(st, 0)) {
+        return auth_process(d, key);
+    }
+    return AUTH_READ;   // parcial: esperar más bytes
+}
+
+/** entrada a la autenticación tras enviar la respuesta del HELLO */
+static unsigned
+hello_to_auth(struct selector_key *key) {
+    struct auth_st *a = &ATTACHMENT(key)->client.auth;   // clobbea el union (hello ya terminó)
+    a->rb     = &ATTACHMENT(key)->read_buffer;
+    a->wb     = &ATTACHMENT(key)->write_buffer;
+    a->status = AUTH_STATUS_FAIL;
+    auth_parser_init(&a->parser);
+    if (selector_set_interest_key(key, OP_READ) != SELECTOR_SUCCESS) {
+        return ERROR;
+    }
+    return auth_drive(key);   // procesa de una lo pipelined; si no, queda en AUTH_READ
+}
+
+static unsigned
+auth_read(struct selector_key *key) {
+    return auth_drive(key);
+}
+
+static unsigned
+auth_write(struct selector_key *key) {
+    struct auth_st *d   = &ATTACHMENT(key)->client.auth;
+    unsigned        ret = AUTH_WRITE;
+
+    size_t   count;
+    uint8_t *ptr = buffer_read_ptr(d->wb, &count);
+    const ssize_t n = send(key->fd, ptr, count, 0);
+    if (n > 0) {
+        buffer_read_adv(d->wb, n);
+        if (!buffer_can_read(d->wb)) {
+            // respuesta enviada. Éxito o falla, en M2 cerramos:
+            // - falla: el RFC1929 EXIGE cerrar tras STATUS != 0.
+            // - éxito: M3 (REQUEST) todavía no existe -> placeholder DONE.
+            // TODO M3: si d->status == AUTH_STATUS_OK -> REQUEST_READ (OP_READ).
+            ret = DONE;
+        }
+    } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+        ret = ERROR;
     }
     return ret;
 }
@@ -325,6 +445,12 @@ static const struct state_definition client_statbl[] = {
     }, {
         .state          = HELLO_WRITE,
         .on_write_ready = hello_write,
+    }, {
+        .state         = AUTH_READ,
+        .on_read_ready = auth_read,
+    }, {
+        .state          = AUTH_WRITE,
+        .on_write_ready = auth_write,
     }, {
         .state = DONE,
     }, {

@@ -47,7 +47,9 @@ chk "$(resp 050102 1)" "0502" "C: bytes parciales            -> 05 02"
 chk "$(resp 0503000102)" "0502" "D: varios métodos (05 03 00 01 02) -> 05 02"
 chk "$(resp 0500)"     "05ff" "E: NMETHODS=0 (05 00)         -> 05 FF"
 chk "$(resp 040100)"   ""     "F: versión inválida (04 ..)  -> cierra sin responder"
-chk "$(resp 050102ab)" "0502" "G: saludo + byte extra (pipelined) -> 05 02"
+# El caso "HELLO + bytes pipelined" pasó a M2: con AUTH habilitado, el byte extra
+# tras el HELLO es el inicio del sub-handshake usuario/contraseña, no se ignora.
+# Se cubre end-to-end en test/m2_integration.sh (casos C y E).
 
 kill -TERM "$SRV" 2>/dev/null; sleep 0.3; kill -9 "$SRV" 2>/dev/null
 echo "== RESULTADO M1: $PASS ok, $FAIL fallas =="

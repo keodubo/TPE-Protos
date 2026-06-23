@@ -24,6 +24,7 @@
 #include "args.h"
 #include "selector.h"
 #include "socks5nio.h"
+#include "users.h"
 
 #define LISTEN_BACKLOG 20
 
@@ -69,6 +70,15 @@ main(const int argc, char **argv) {
     struct socks5args args;
     parse_args(argc, argv, &args);
 
+    // cargar la tabla de usuarios del proxy (RFC1929) desde los -u name:pass
+    for (int i = 0; i < MAX_USERS && args.users[i].name != NULL; i++) {
+        if (!users_add(args.users[i].name, args.users[i].pass)) {
+            fprintf(stderr,
+                    "aviso: usuario '-u %s' ignorado (vacío, duplicado o inválido)\n",
+                    args.users[i].name);
+        }
+    }
+
     close(STDIN_FILENO);            // no leemos de stdin
     signal(SIGPIPE, SIG_IGN);       // no morir al escribir sobre un socket roto
     signal(SIGTERM, sigterm_handler);
@@ -83,7 +93,7 @@ main(const int argc, char **argv) {
     if (socks_fd < 0) {
         goto finally;
     }
-    fprintf(stdout, "[M1-hello] proxy SOCKS escuchando en %s:%u\n",
+    fprintf(stdout, "[socks5] proxy escuchando en %s:%u\n",
             args.socks_addr, args.socks_port);
 
     const struct selector_init conf = {
