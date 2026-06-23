@@ -6,7 +6,8 @@
  * Los handlers top-level (socksv5_read/write) delegan en la `stm`; cuando la
  * máquina llega a DONE o ERROR se desregistran y cierran los fds.
  *
- * M3: REQUEST + CONNECT IPv4 literal; el relay/COPY queda para M4.
+ * M3: REQUEST + CONNECT IPv4 literal.
+ * M4: relay bidireccional transparente cliente <-> origin.
  */
 #include <stdlib.h>   // malloc
 #include <string.h>   // memset
@@ -26,88 +27,17 @@
 #include "auth.h"
 #include "request.h"
 #include "connect.h"
+#include "copy.h"
 #include "users.h"
 #include "dbg.h"
+#include "socks5.h"
 #include "socks5nio.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 
-/** estados de la máquina de la conexión cliente. DEBEN ser correlativos. */
-enum socks_v5state {
-    HELLO_READ  = 0,   // lee y procesa el saludo del cliente
-    HELLO_WRITE,       // envía la selección de método
-    AUTH_READ,         // lee el sub-handshake usuario/contraseña (RFC1929)
-    AUTH_WRITE,        // envía VER STATUS de la autenticación
-    REQUEST_READ,      // lee y procesa REQUEST (RFC1928 §4)
-    REQUEST_CONNECTING,// espera resultado del connect no bloqueante
-    REQUEST_WRITE,     // envía REP al cliente
-    // TODO M4: COPY
-    DONE,
-    ERROR,
-};
-
-/** variables de los estados HELLO_READ / HELLO_WRITE */
-struct hello_st {
-    buffer              *rb, *wb;
-    struct hello_parser  parser;
-    /** método elegido por el servidor (USERPASS o NO_ACCEPTABLE) */
-    uint8_t              method;
-    /** métodos ofrecidos por el cliente (para el log de debug) */
-    uint8_t              offered[8];
-    uint8_t              noffered;
-};
-
-/** variables de los estados AUTH_READ / AUTH_WRITE (RFC1929) */
-struct auth_st {
-    buffer              *rb, *wb;
-    struct auth_parser   parser;
-    uint8_t              status;   // 0x00 ok / 0x01 fail
-};
-
-/** variables de REQUEST_READ / REQUEST_WRITE (RFC1928) */
-struct request_st {
-    buffer                *rb, *wb;
-    struct request_parser  parser;
-    uint8_t                rep;
-    bool                   initialized;
-};
-
-/** variables de REQUEST_CONNECTING */
-struct connecting_st {
-    uint8_t                rep;
-};
-
-/** una conexión SOCKS5; se aloca una vez por cliente y se reusa vía pool. */
-struct socks5 {
-    int                  client_fd;
-    int                  origin_fd;
-
-    /** dirección del cliente (para logs) e id de conexión */
-    struct sockaddr_storage client_addr;
-    socklen_t               client_addr_len;
-    unsigned                id;
-
-    struct state_machine stm;
-
-    /** estados sobre el client_fd */
-    union {
-        struct hello_st  hello;
-        struct auth_st   auth;
-        struct request_st request;
-    } client;
-
-    struct connecting_st connecting;
-
-    /** buffers de I/O */
-    uint8_t              raw_buff_a[IO_BUFFER_SIZE];
-    uint8_t              raw_buff_b[IO_BUFFER_SIZE];
-    buffer               read_buffer;
-    buffer               write_buffer;
-
-    /** contador de referencias y free-list del pool */
-    unsigned             references;
-    struct socks5       *next;
-};
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Pool de objetos (reusar alocaciones para sostener muchas conexiones)
@@ -188,7 +118,6 @@ socksv5_pool_destroy(void) {
 // Handlers de selección de una conexión establecida
 static void socksv5_read (struct selector_key *key);
 static void socksv5_write(struct selector_key *key);
-static void socksv5_origin_write(struct selector_key *key);
 static void socksv5_close(struct selector_key *key);
 
 static const struct fd_handler socks5_handler = {
@@ -199,8 +128,8 @@ static const struct fd_handler socks5_handler = {
 };
 
 static const struct fd_handler socks5_origin_handler = {
-    .handle_read  = NULL,
-    .handle_write = socksv5_origin_write,
+    .handle_read  = socksv5_read,
+    .handle_write = socksv5_write,
     .handle_close = socksv5_close,
     .handle_block = NULL,
 };
@@ -316,7 +245,7 @@ hello_read(struct selector_key *key) {
         buffer_write_adv(d->rb, n);
         const enum hello_state st = hello_consume(d->rb, &d->parser, &error);
         if (error) {
-            DBG("[conn #%u] hello: saludo inválido (¿versión?), cierra",
+            DBG("[conn #%u] hello: saludo inválido, cierra",
                 ATTACHMENT(key)->id);
         } else if (hello_is_done(st, 0)) {
             if (selector_set_interest_key(key, OP_WRITE) == SELECTOR_SUCCESS) {
@@ -592,20 +521,17 @@ request_connecting_read(struct selector_key *key) {
     size_t   count;
     uint8_t *ptr = buffer_write_ptr(d->rb, &count);
     if (count == 0) {
-        // Buffer lleno durante el connect: parkear el cliente en OP_NOOP
-        // escondería un EOF posterior hasta que el connect resuelva/timeout del
-        // SO (retención de fds, vector DoS con destinos blackhole). En M3 no hay
-        // relay y el payload temprano se descarta igual, así que cerramos limpio.
-        return DONE;
+        return client_set_interest(key, OP_NOOP) == SELECTOR_SUCCESS
+             ? REQUEST_CONNECTING : ERROR;
     }
 
     const ssize_t n = recv(key->fd, ptr, count, 0);
     if (n > 0) {
         buffer_write_adv(d->rb, n);
         if (!buffer_can_write(d->rb)) {
-            // Ver arriba: no parkeamos el cliente en OP_NOOP durante el connect
-            // para no esconder un EOF posterior; cerramos limpio en su lugar.
-            return DONE;
+            if (client_set_interest(key, OP_NOOP) != SELECTOR_SUCCESS) {
+                return ERROR;
+            }
         }
         return REQUEST_CONNECTING;
     }
@@ -667,14 +593,14 @@ request_write(struct selector_key *key) {
     size_t   count;
     uint8_t *ptr = buffer_read_ptr(d->wb, &count);
     if (count == 0) {
-        return DONE;
+        return d->rep == REQUEST_REP_SUCCEEDED ? COPY : DONE;
     }
 
-    const ssize_t n = send(key->fd, ptr, count, 0);
+    const ssize_t n = send(key->fd, ptr, count, MSG_NOSIGNAL);
     if (n > 0) {
         buffer_read_adv(d->wb, n);
         if (!buffer_can_read(d->wb)) {
-            return DONE;    // M3 estricto: sin relay; M4 reemplaza esto por COPY.
+            return d->rep == REQUEST_REP_SUCCEEDED ? COPY : DONE;
         }
     } else if (n == -1
             && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
@@ -710,6 +636,11 @@ static const struct state_definition client_statbl[] = {
         .state          = REQUEST_WRITE,
         .on_write_ready = request_write,
     }, {
+        .state          = COPY,
+        .on_arrival     = copy_init,
+        .on_read_ready  = copy_read,
+        .on_write_ready = copy_write,
+    }, {
         .state = DONE,
     }, {
         .state = ERROR,
@@ -736,15 +667,6 @@ socksv5_read(struct selector_key *key) {
 
 static void
 socksv5_write(struct selector_key *key) {
-    struct state_machine     *stm = &ATTACHMENT(key)->stm;
-    const enum socks_v5state  st  = stm_handler_write(stm, key);
-    if (st == ERROR || st == DONE) {
-        socksv5_done(key);
-    }
-}
-
-static void
-socksv5_origin_write(struct selector_key *key) {
     struct state_machine     *stm = &ATTACHMENT(key)->stm;
     const enum socks_v5state  st  = stm_handler_write(stm, key);
     if (st == ERROR || st == DONE) {

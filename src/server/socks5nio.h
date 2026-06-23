@@ -7,10 +7,10 @@
  * Tamaño de los buffers de I/O por conexión.
  * NO es un número mágico: se elige midiendo (ver docs/extras/buffer-sizing.md).
  * Sobreescribible sin tocar el código:
- *   make CFLAGS_EXTRA=-DIO_BUFFER_SIZE=8192
+ *   make CFLAGS_EXTRA=-DIO_BUFFER_SIZE=16384
  */
 #ifndef IO_BUFFER_SIZE
-#define IO_BUFFER_SIZE 4096
+#define IO_BUFFER_SIZE 8192
 #endif
 
 /* piso de cordura: la respuesta del REQUEST (IPv4) necesita 10 bytes libres;

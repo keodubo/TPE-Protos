@@ -3,10 +3,10 @@
 Servidor proxy **SOCKS5 (RFC1928)** en C11 con I/O no bloqueante multiplexado,
 más un protocolo propio de monitoreo y configuración con su cliente de terminal.
 
-> **Estado:** en desarrollo. Actualmente implementados **M1/M2/M3 estricto**:
+> **Estado:** en desarrollo. Actualmente implementados **M1/M2/M3/M4 estricto**:
 > HELLO SOCKS5, autenticacion user/pass y REQUEST + CONNECT IPv4 literal no
-> bloqueante. El relay de datos queda para **M4**. Verificado compilando y
-> corriendo en **pampero** (Arch Linux, gcc 16) y en **macOS**.
+> bloqueante con relay bidireccional transparente. Verificado compilando en
+> **macOS**; validar tambien en **pampero** (Arch Linux, gcc 16).
 
 ## Estado de hitos y QA
 
@@ -14,12 +14,13 @@ más un protocolo propio de monitoreo y configuración con su cliente de termina
 - **M2:** autenticacion user/pass (RFC1929).
 - **M3:** REQUEST + CONNECT solo para `CMD=CONNECT` y `ATYP=IPv4`; FQDN/IPv6 y
   comandos no soportados responden con REP de error.
-- **M4 pendiente:** relay/copy de datos entre cliente y origen.
+- **M4:** relay/copy bidireccional entre cliente y origen, con lecturas y
+  escrituras parciales y cierre half-close.
 
 Regla de mantenimiento: cada implementacion de un nuevo **M** debe actualizar o
 agregar sus tests unitarios e integracion correspondientes, y revisar si los
 tests de los hitos anteriores siguen describiendo el comportamiento actual. El
-objetivo es que `make check` cubra la regresion M1/M2/M3 y no quede una suite
+objetivo es que `make check` cubra la regresion M1/M2/M3/M4 y no quede una suite
 verde pero obsoleta. Para paths de memoria/fds bajo trafico real, usar
 `make valgrind` en Linux/pampero.
 
