@@ -3,9 +3,25 @@
 Servidor proxy **SOCKS5 (RFC1928)** en C11 con I/O no bloqueante multiplexado,
 más un protocolo propio de monitoreo y configuración con su cliente de terminal.
 
-> **Estado:** en desarrollo. Actualmente implementado **M0** (esqueleto echo no
-> bloqueante que valida la integración del toolkit). Verificado compilando y
+> **Estado:** en desarrollo. Actualmente implementados **M1/M2/M3 estricto**:
+> HELLO SOCKS5, autenticacion user/pass y REQUEST + CONNECT IPv4 literal no
+> bloqueante. El relay de datos queda para **M4**. Verificado compilando y
 > corriendo en **pampero** (Arch Linux, gcc 16) y en **macOS**.
+
+## Estado de hitos y QA
+
+- **M1:** negociacion HELLO SOCKS5.
+- **M2:** autenticacion user/pass (RFC1929).
+- **M3:** REQUEST + CONNECT solo para `CMD=CONNECT` y `ATYP=IPv4`; FQDN/IPv6 y
+  comandos no soportados responden con REP de error.
+- **M4 pendiente:** relay/copy de datos entre cliente y origen.
+
+Regla de mantenimiento: cada implementacion de un nuevo **M** debe actualizar o
+agregar sus tests unitarios e integracion correspondientes, y revisar si los
+tests de los hitos anteriores siguen describiendo el comportamiento actual. El
+objetivo es que `make check` cubra la regresion M1/M2/M3 y no quede una suite
+verde pero obsoleta. Para paths de memoria/fds bajo trafico real, usar
+`make valgrind` en Linux/pampero.
 
 ## Estructura del repositorio
 ```
@@ -45,13 +61,10 @@ Los binarios quedan en `bin/`.
   -N               desactiva los disectores (sniffing)
   -h / -v          ayuda / versión
 ```
-**M0 (estado actual):** el servidor acepta conexiones TCP en el puerto SOCKS y
-hace *echo* de lo recibido (placeholder hasta implementar la negociación SOCKS5).
-
-Prueba rápida del echo actual:
+Prueba rapida del servidor SOCKS:
 ```bash
 ./bin/server -p 1080 &
-printf 'hola\n' | nc 127.0.0.1 1080      # devuelve "hola"
+# handshake SOCKS5/auth/request con test/*_integration.sh o make check
 kill %1
 ```
 

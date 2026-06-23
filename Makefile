@@ -60,11 +60,21 @@ $(TEST_REQUEST): test/request_test.c src/server/request.c src/shared/buffer.c
 
 # integración sobre el socket real (levanta el server y habla SOCKS5)
 PORT?=11080
+SKIP_VALGRIND_IF_MISSING?=0
 integration: server
 	@for t in test/*_integration.sh; do echo "--- $$t ---"; "$$t" $(PORT) || exit 1; done
 
 # suite completa: unitarios + integración
 check: test integration
+
+# leak / use-after-free check con TRÁFICO REAL bajo valgrind (Linux + valgrind).
+# Levanta el server bajo valgrind y lo atraviesa con una batería de conexiones
+# SOCKS5 (CONNECT, rutas de error, cierres). Falla si hay errores o leaks.
+#   make valgrind            # puerto por defecto
+#   make valgrind PORT=12345 # puerto alternativo
+#   make valgrind SKIP_VALGRIND_IF_MISSING=1 # saltea si falta valgrind/python3
+valgrind: server
+	SKIP_VALGRIND_IF_MISSING=$(SKIP_VALGRIND_IF_MISSING) bash test/valgrind_traffic.sh $(PORT)
 
 $(TEST_HELLO): test/hello_test.c src/server/hello.c src/shared/buffer.c
 	mkdir -p $(OUTPUT_FOLDER)
@@ -78,4 +88,4 @@ clean:
 	rm -rf $(OUTPUT_FOLDER)
 	rm -rf $(OBJECTS_FOLDER)
 
-.PHONY: all server client test integration check clean
+.PHONY: all server client test integration check valgrind clean
