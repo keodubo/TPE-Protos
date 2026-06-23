@@ -1,8 +1,7 @@
 # TPE Protocolos de Comunicación — Proxy SOCKS5
 
 Servidor proxy **SOCKS5 (RFC1928)** en C11 con I/O no bloqueante multiplexado,
-más un protocolo propio de monitoreo/configuración y su cliente de terminal.
-ITBA — Protocolos de Comunicación 2026/1.
+más un protocolo propio de monitoreo y configuración con su cliente de terminal.
 
 > **Estado:** en desarrollo. Actualmente implementado **M0** (esqueleto echo no
 > bloqueante que valida la integración del toolkit). Verificado compilando y
