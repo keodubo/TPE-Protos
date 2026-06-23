@@ -8,6 +8,7 @@ bin/
 # === Extras ===
 tmp/
 extras/
+scripts/
 
 # === macOS ===
 .DS_Store

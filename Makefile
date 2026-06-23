@@ -32,8 +32,24 @@ obj/%.o: src/%.c
 	mkdir -p $(OBJECTS_FOLDER)/shared
 	$(COMPILER) $(COMPILER_FLAGS) -c $< -o $@
 
+# tests unitarios (harness plano en C, sin libcheck)
+TEST_HELLO=$(OUTPUT_FOLDER)/hello_test
+TEST_DBG=$(OUTPUT_FOLDER)/dbg_test
+
+test: $(TEST_HELLO) $(TEST_DBG)
+	$(TEST_HELLO)
+	$(TEST_DBG)
+
+$(TEST_HELLO): test/hello_test.c src/server/hello.c src/shared/buffer.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_HELLO)
+
+$(TEST_DBG): test/dbg_test.c src/server/dbg.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_DBG)
+
 clean:
 	rm -rf $(OUTPUT_FOLDER)
 	rm -rf $(OBJECTS_FOLDER)
 
-.PHONY: all server client clean
+.PHONY: all server client test clean

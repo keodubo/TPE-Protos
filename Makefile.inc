@@ -28,8 +28,13 @@ else
 	PLATFORM_FLAGS=-D_POSIX_C_SOURCE=200809L
 endif
 
-COMPILER_FLAGS=-std=c11 -pedantic -Wall -Wextra -g \
-	$(PLATFORM_FLAGS) \
+# -fcommon: el stm.h de la cátedra define un global tentativo `key`; con gcc 10+
+#           (-fno-common, como pampero) incluirlo en 2+ .c rompe el link
+#           ("multiple definition of key"). -fcommon lo permite sin tocar el código.
+# CFLAGS_EXTRA: knobs desde la línea de comandos, p.ej. tamaño de buffer:
+#           make CFLAGS_EXTRA=-DIO_BUFFER_SIZE=8192   (ver docs/extras/buffer-sizing.md)
+COMPILER_FLAGS=-std=c11 -pedantic -Wall -Wextra -g -fcommon \
+	$(PLATFORM_FLAGS) $(CFLAGS_EXTRA) \
 	-Isrc/shared -Isrc/server -Isrc/client
 
 LD_FLAGS=-pthread

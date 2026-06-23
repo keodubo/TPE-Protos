@@ -64,34 +64,18 @@ if make 2>/tmp/tpe_build.log; then echo "          BUILD OK"; else
   echo "          BUILD FALLA"; cat /tmp/tpe_build.log; exit 1
 fi
 
-echo "[run]     ./bin/server -p $PORT  (echo + shutdown)"
-./bin/server -p "$PORT" >/tmp/tpe_srv.log 2>&1 &
-SRV=$!
-sleep 1
+echo "[unit]  make test"
+make test || echo "  (unit tests con fallas)"
 
-# --- echo test sin dependencias (bash /dev/tcp) ---
-exec 3<>"/dev/tcp/127.0.0.1/$PORT"
-printf 'hola pampero\n' >&3
-RESP="$(head -c 12 <&3)"
-exec 3>&- 3<&-
-[ "$RESP" = "hola pampero" ] && echo "          echo: OK" || echo "          echo: FALLA ($RESP)"
+echo "[integration] test/*_integration.sh"
+for t in test/*_integration.sh; do
+  [ -e "$t" ] || continue
+  echo "  --- $t ---"; bash "$t" "$PORT"
+done
 
-# --- apagado limpio por SIGTERM ---
-kill -TERM "$SRV" 2>/dev/null || true
-sleep 1
-if kill -0 "$SRV" 2>/dev/null; then echo "          shutdown: FALLA"; kill -9 "$SRV"
-else echo "          shutdown: OK"; fi
-
-# --- (opcional) valgrind: en Arch necesita debuginfod (sin root) ---
-# Descomentá para chequear fugas. Requiere que pampero permita salida a internet.
-# if command -v valgrind >/dev/null 2>&1; then
+# (opcional) valgrind — en Arch (pampero) necesita debuginfod (sin root):
 #   DEBUGINFOD_URLS=https://debuginfod.archlinux.org \
-#     valgrind --leak-check=full --log-file=/tmp/tpe_vg.log ./bin/server -p "$((PORT+1))" &
-#   VG=$!; sleep 5
-#   exec 3<>"/dev/tcp/127.0.0.1/$((PORT+1))"; printf 'x\n' >&3; head -c 1 <&3 >/dev/null; exec 3>&- 3<&-
-#   sleep 1; kill -TERM "$VG"; wait "$VG" 2>/dev/null
-#   echo "[valgrind]"; tail -n 12 /tmp/tpe_vg.log | sed 's/^/          /'
-# fi
+#     valgrind --leak-check=full ./bin/server -p "$PORT" -u user:pass
 REMOTE
 echo "--------------------------------------------------------------"
 echo "==> Listo. (la conexión se cierra sola)"
