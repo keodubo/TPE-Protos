@@ -37,12 +37,14 @@ TEST_HELLO=$(OUTPUT_FOLDER)/hello_test
 TEST_DBG=$(OUTPUT_FOLDER)/dbg_test
 TEST_AUTH=$(OUTPUT_FOLDER)/auth_test
 TEST_USERS=$(OUTPUT_FOLDER)/users_test
+TEST_REQUEST=$(OUTPUT_FOLDER)/request_test
 
-test: $(TEST_HELLO) $(TEST_DBG) $(TEST_AUTH) $(TEST_USERS)
+test: $(TEST_HELLO) $(TEST_DBG) $(TEST_AUTH) $(TEST_USERS) $(TEST_REQUEST)
 	$(TEST_HELLO)
 	$(TEST_DBG)
 	$(TEST_AUTH)
 	$(TEST_USERS)
+	$(TEST_REQUEST)
 
 $(TEST_AUTH): test/auth_test.c src/server/auth.c src/shared/buffer.c
 	mkdir -p $(OUTPUT_FOLDER)
@@ -51,6 +53,10 @@ $(TEST_AUTH): test/auth_test.c src/server/auth.c src/shared/buffer.c
 $(TEST_USERS): test/users_test.c src/server/users.c
 	mkdir -p $(OUTPUT_FOLDER)
 	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_USERS)
+
+$(TEST_REQUEST): test/request_test.c src/server/request.c src/shared/buffer.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_REQUEST)
 
 # integración sobre el socket real (levanta el server y habla SOCKS5)
 PORT?=11080

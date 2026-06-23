@@ -6,7 +6,7 @@
  * Los handlers top-level (socksv5_read/write) delegan en la `stm`; cuando la
  * máquina llega a DONE o ERROR se desregistran y cierran los fds.
  *
- * Estados siguientes (M3+): tras AUTH OK se insertará REQUEST/CONNECT.
+ * M3: REQUEST + CONNECT IPv4 literal; el relay/COPY queda para M4.
  */
 #include <stdlib.h>   // malloc
 #include <string.h>   // memset
@@ -23,6 +23,8 @@
 #include "netutils.h"
 #include "hello.h"
 #include "auth.h"
+#include "request.h"
+#include "connect.h"
 #include "users.h"
 #include "dbg.h"
 #include "socks5nio.h"
@@ -35,7 +37,9 @@ enum socks_v5state {
     HELLO_WRITE,       // envía la selección de método
     AUTH_READ,         // lee el sub-handshake usuario/contraseña (RFC1929)
     AUTH_WRITE,        // envía VER STATUS de la autenticación
-    // TODO M3: REQUEST_READ, REQUEST_CONNECTING, REQUEST_WRITE
+    REQUEST_READ,      // lee y procesa REQUEST (RFC1928 §4)
+    REQUEST_CONNECTING,// espera resultado del connect no bloqueante
+    REQUEST_WRITE,     // envía REP al cliente
     // TODO M4: COPY
     DONE,
     ERROR,
@@ -59,6 +63,19 @@ struct auth_st {
     uint8_t              status;   // 0x00 ok / 0x01 fail
 };
 
+/** variables de REQUEST_READ / REQUEST_WRITE (RFC1928) */
+struct request_st {
+    buffer                *rb, *wb;
+    struct request_parser  parser;
+    uint8_t                rep;
+    bool                   initialized;
+};
+
+/** variables de REQUEST_CONNECTING */
+struct connecting_st {
+    uint8_t                rep;
+};
+
 /** una conexión SOCKS5; se aloca una vez por cliente y se reusa vía pool. */
 struct socks5 {
     int                  client_fd;
@@ -75,7 +92,10 @@ struct socks5 {
     union {
         struct hello_st  hello;
         struct auth_st   auth;
+        struct request_st request;
     } client;
+
+    struct connecting_st connecting;
 
     /** buffers de I/O */
     uint8_t              raw_buff_a[IO_BUFFER_SIZE];
@@ -101,6 +121,7 @@ static const struct state_definition *socks5_describe_states(void);
 
 /** entrada a la autenticación desde HELLO_WRITE (definida en la sección AUTH) */
 static unsigned hello_to_auth(struct selector_key *key);
+static unsigned auth_to_request(struct selector_key *key);
 
 static struct socks5 *
 socks5_new(const int client_fd) {
@@ -166,11 +187,19 @@ socksv5_pool_destroy(void) {
 // Handlers de selección de una conexión establecida
 static void socksv5_read (struct selector_key *key);
 static void socksv5_write(struct selector_key *key);
+static void socksv5_origin_write(struct selector_key *key);
 static void socksv5_close(struct selector_key *key);
 
 static const struct fd_handler socks5_handler = {
     .handle_read  = socksv5_read,
     .handle_write = socksv5_write,
+    .handle_close = socksv5_close,
+    .handle_block = NULL,
+};
+
+static const struct fd_handler socks5_origin_handler = {
+    .handle_read  = NULL,
+    .handle_write = socksv5_origin_write,
     .handle_close = socksv5_close,
     .handle_block = NULL,
 };
@@ -425,16 +454,220 @@ auth_write(struct selector_key *key) {
     if (n > 0) {
         buffer_read_adv(d->wb, n);
         if (!buffer_can_read(d->wb)) {
-            // respuesta enviada. Éxito o falla, en M2 cerramos:
-            // - falla: el RFC1929 EXIGE cerrar tras STATUS != 0.
-            // - éxito: M3 (REQUEST) todavía no existe -> placeholder DONE.
-            // TODO M3: si d->status == AUTH_STATUS_OK -> REQUEST_READ (OP_READ).
-            ret = DONE;
+            // RFC1929 exige cerrar tras STATUS != OK; si autenticó, sigue REQUEST.
+            ret = d->status == AUTH_STATUS_OK ? auth_to_request(key) : DONE;
         }
     } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
         ret = ERROR;
     }
     return ret;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// REQUEST + CONNECT IPv4 literal (RFC1928 §4-§6)
+
+static selector_status
+client_set_interest(struct selector_key *key, const fd_interest interest) {
+    const struct socks5 *s = ATTACHMENT(key);
+    if (s->client_fd == -1) {
+        return SELECTOR_IARGS;
+    }
+    return selector_set_interest(key->s, s->client_fd, interest);
+}
+
+static unsigned
+request_reply(struct selector_key *key,
+              const uint8_t rep,
+              const struct sockaddr_in *bound_addr) {
+    struct request_st *d = &ATTACHMENT(key)->client.request;
+    d->rep = rep;
+    buffer_reset(d->wb);
+    if (request_marshall(d->wb, rep, bound_addr) == -1
+            || client_set_interest(key, OP_WRITE) != SELECTOR_SUCCESS) {
+        return ERROR;
+    }
+    return REQUEST_WRITE;
+}
+
+static void
+request_read_init(const unsigned state, struct selector_key *key) {
+    (void) state;
+    struct request_st *d = &ATTACHMENT(key)->client.request;
+    if (d->initialized) {
+        return;
+    }
+    d->rb          = &ATTACHMENT(key)->read_buffer;
+    d->wb          = &ATTACHMENT(key)->write_buffer;
+    d->rep         = REQUEST_REP_GENERAL_FAILURE;
+    d->initialized = true;
+    request_parser_init(&d->parser);
+    buffer_reset(d->wb);
+}
+
+static unsigned
+request_process(struct selector_key *key) {
+    struct socks5     *s = ATTACHMENT(key);
+    struct request_st *d = &s->client.request;
+    uint8_t            rep = REQUEST_REP_GENERAL_FAILURE;
+
+    s->references++;
+    if (request_connect_ipv4(key->s, &socks5_origin_handler, s,
+                             &d->parser.request, &s->origin_fd, &rep) == -1) {
+        socks5_destroy(s);  // deshace la referencia especulativa del origin_fd
+        DBG("[conn #%u] request: connect inmediato falla -> REP 0x%02x",
+            s->id, rep);
+        return request_reply(key, rep, NULL);
+    }
+
+    if (client_set_interest(key, OP_READ) != SELECTOR_SUCCESS) {
+        return ERROR;
+    }
+    s->connecting.rep = REQUEST_REP_GENERAL_FAILURE;
+    DBG("[conn #%u] request: connect en progreso fd=%d", s->id, s->origin_fd);
+    return REQUEST_CONNECTING;
+}
+
+static unsigned
+request_drive(struct selector_key *key) {
+    struct request_st *d     = &ATTACHMENT(key)->client.request;
+    bool               error = false;
+
+    enum request_state st = request_consume(d->rb, &d->parser, &error);
+    if (!error && !request_is_done(st, 0)) {
+        size_t   count;
+        uint8_t *ptr = buffer_write_ptr(d->rb, &count);
+        if (count == 0) {
+            return REQUEST_READ;
+        }
+        const ssize_t n = recv(key->fd, ptr, count, 0);
+        if (n > 0) {
+            buffer_write_adv(d->rb, n);
+            st = request_consume(d->rb, &d->parser, &error);
+        } else if (n == 0) {
+            return ERROR;
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            return ERROR;
+        }
+    }
+
+    if (error) {
+        const uint8_t rep = request_state_rep(st);
+        DBG("[conn #%u] request: parseo inválido -> REP 0x%02x",
+            ATTACHMENT(key)->id, rep);
+        return request_reply(key, rep, NULL);
+    }
+    if (request_is_done(st, 0)) {
+        return request_process(key);
+    }
+    return REQUEST_READ;
+}
+
+static unsigned
+auth_to_request(struct selector_key *key) {
+    struct request_st *r = &ATTACHMENT(key)->client.request;   // clobbea AUTH
+    memset(r, 0, sizeof(*r));
+    request_read_init(REQUEST_READ, key);
+    if (selector_set_interest_key(key, OP_READ) != SELECTOR_SUCCESS) {
+        return ERROR;
+    }
+    return request_drive(key);
+}
+
+static unsigned
+request_read(struct selector_key *key) {
+    return request_drive(key);
+}
+
+static unsigned
+request_connecting_read(struct selector_key *key) {
+    struct request_st *d = &ATTACHMENT(key)->client.request;
+
+    size_t   count;
+    uint8_t *ptr = buffer_write_ptr(d->rb, &count);
+    if (count == 0) {
+        if (client_set_interest(key, OP_NOOP) != SELECTOR_SUCCESS) {
+            return ERROR;
+        }
+        return REQUEST_CONNECTING;
+    }
+
+    const ssize_t n = recv(key->fd, ptr, count, 0);
+    if (n > 0) {
+        buffer_write_adv(d->rb, n);
+        if (!buffer_can_write(d->rb)
+                && client_set_interest(key, OP_NOOP) != SELECTOR_SUCCESS) {
+            return ERROR;
+        }
+        return REQUEST_CONNECTING;
+    }
+    if (n == 0) {
+        return DONE;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+        return REQUEST_CONNECTING;
+    }
+    return ERROR;
+}
+
+static unsigned
+request_connecting(struct selector_key *key) {
+    struct socks5 *s = ATTACHMENT(key);
+    int            so_error = 0;
+    socklen_t      so_len   = sizeof(so_error);
+
+    if (getsockopt(key->fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) == -1) {
+        so_error = errno;
+    }
+
+    if (so_error == 0) {
+        struct sockaddr_in bound;
+        socklen_t          bound_len = sizeof(bound);
+        memset(&bound, 0, sizeof(bound));
+        bound.sin_family = AF_INET;
+        if (getsockname(key->fd, (struct sockaddr *) &bound, &bound_len) == -1
+                || bound.sin_family != AF_INET) {
+            memset(&bound, 0, sizeof(bound));
+            bound.sin_family = AF_INET;
+        }
+        if (selector_set_interest_key(key, OP_NOOP) != SELECTOR_SUCCESS) {
+            return ERROR;
+        }
+        s->connecting.rep = REQUEST_REP_SUCCEEDED;
+        DBG("[conn #%u] request: connect OK", s->id);
+        return request_reply(key, REQUEST_REP_SUCCEEDED, &bound);
+    }
+
+    s->connecting.rep = request_connect_errno_rep(so_error);
+    DBG("[conn #%u] request: connect falla errno=%d -> REP 0x%02x",
+        s->id, so_error, s->connecting.rep);
+    if (s->origin_fd != -1
+            && selector_unregister_fd(key->s, s->origin_fd) != SELECTOR_SUCCESS) {
+        return ERROR;
+    }
+    return request_reply(key, s->connecting.rep, NULL);
+}
+
+static unsigned
+request_write(struct selector_key *key) {
+    struct request_st *d = &ATTACHMENT(key)->client.request;
+
+    size_t   count;
+    uint8_t *ptr = buffer_read_ptr(d->wb, &count);
+    if (count == 0) {
+        return DONE;
+    }
+
+    const ssize_t n = send(key->fd, ptr, count, 0);
+    if (n > 0) {
+        buffer_read_adv(d->wb, n);
+        if (!buffer_can_read(d->wb)) {
+            return DONE;    // M3 estricto: sin relay; M4 reemplaza esto por COPY.
+        }
+    } else if (n == -1
+            && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+        return ERROR;
+    }
+    return REQUEST_WRITE;
 }
 
 /** tabla de estados (índices correlativos con enum socks_v5state) */
@@ -452,6 +685,17 @@ static const struct state_definition client_statbl[] = {
     }, {
         .state          = AUTH_WRITE,
         .on_write_ready = auth_write,
+    }, {
+        .state         = REQUEST_READ,
+        .on_arrival    = request_read_init,
+        .on_read_ready = request_read,
+    }, {
+        .state          = REQUEST_CONNECTING,
+        .on_read_ready  = request_connecting_read,
+        .on_write_ready = request_connecting,
+    }, {
+        .state          = REQUEST_WRITE,
+        .on_write_ready = request_write,
     }, {
         .state = DONE,
     }, {
@@ -479,6 +723,15 @@ socksv5_read(struct selector_key *key) {
 
 static void
 socksv5_write(struct selector_key *key) {
+    struct state_machine     *stm = &ATTACHMENT(key)->stm;
+    const enum socks_v5state  st  = stm_handler_write(stm, key);
+    if (st == ERROR || st == DONE) {
+        socksv5_done(key);
+    }
+}
+
+static void
+socksv5_origin_write(struct selector_key *key) {
     struct state_machine     *stm = &ATTACHMENT(key)->stm;
     const enum socks_v5state  st  = stm_handler_write(stm, key);
     if (st == ERROR || st == DONE) {
