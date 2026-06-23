@@ -29,6 +29,13 @@ bool users_add(const char *name, const char *pass);
  */
 bool users_validate(const char *name, const char *pass);
 
+/**
+ * Variante para RFC1929: compara usando las longitudes ULEN/PLEN recibidas por
+ * el cable, por lo que bytes NUL embebidos no pueden autenticar como prefijo.
+ */
+bool users_validate_len(const char *name, size_t name_len,
+                        const char *pass, size_t pass_len);
+
 /** cantidad de usuarios cargados */
 size_t users_count(void);
 

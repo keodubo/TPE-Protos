@@ -331,6 +331,11 @@ selector_destroy(fd_selector s) {
 
 #define INVALID_FD(fd)  ((fd) < 0 || (fd) >= ITEMS_MAX_SIZE)
 
+static bool
+selector_fd_in_bounds(fd_selector s, const int fd) {
+    return s != NULL && !INVALID_FD(fd) && (size_t)fd < s->fd_size;
+}
+
 selector_status
 selector_register(fd_selector        s,
                      const int          fd,
@@ -379,7 +384,7 @@ selector_unregister_fd(fd_selector       s,
                        const int         fd) {
     selector_status ret = SELECTOR_SUCCESS;
 
-    if(NULL == s || INVALID_FD(fd)) {
+    if(!selector_fd_in_bounds(s, fd)) {
         ret = SELECTOR_IARGS;
         goto finally;
     }
@@ -414,7 +419,7 @@ selector_status
 selector_set_interest(fd_selector s, int fd, fd_interest i) {
     selector_status ret = SELECTOR_SUCCESS;
 
-    if(NULL == s || INVALID_FD(fd)) {
+    if(!selector_fd_in_bounds(s, fd)) {
         ret = SELECTOR_IARGS;
         goto finally;
     }
@@ -489,6 +494,13 @@ handle_block_notifications(fd_selector s) {
     struct blocking_job* j = s->resolution_jobs;
     while (j != NULL) {
 
+        if (!selector_fd_in_bounds(s, j->fd)) {
+            struct blocking_job* aux = j;
+            j = j->next;
+            free(aux);
+            continue;
+        }
+
         struct item* item = s->fds + j->fd;
         if (ITEM_USED(item)) {
             key.fd = item->fd;
@@ -509,6 +521,11 @@ selector_status
 selector_notify_block(fd_selector  s,
                  const int    fd) {
     selector_status ret = SELECTOR_SUCCESS;
+
+    if(!selector_fd_in_bounds(s, fd)) {
+        ret = SELECTOR_IARGS;
+        goto finally;
+    }
 
     // TODO(juan): usar un pool
     struct blocking_job *job = malloc(sizeof(*job));

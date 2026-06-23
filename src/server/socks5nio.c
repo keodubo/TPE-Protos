@@ -338,10 +338,11 @@ hello_write(struct selector_key *key) {
 /** valida credenciales, serializa la respuesta y pasa a AUTH_WRITE */
 static unsigned
 auth_process(struct auth_st *d, struct selector_key *key) {
-    const bool ok = users_validate(d->parser.uname, d->parser.passwd);
+    const bool ok = users_validate_len(d->parser.uname, d->parser.ulen,
+                                       d->parser.passwd, d->parser.plen);
     d->status = ok ? AUTH_STATUS_OK : AUTH_STATUS_FAIL;
-    DBG("[conn #%u] auth: usuario '%s' -> %s", ATTACHMENT(key)->id,
-        d->parser.uname, ok ? "OK" : "RECHAZADO");
+    DBG("[conn #%u] auth: ulen=%u -> %s", ATTACHMENT(key)->id,
+        (unsigned)d->parser.ulen, ok ? "OK" : "RECHAZADO");
     if (auth_marshall(d->wb, d->status) == -1
             || selector_set_interest_key(key, OP_WRITE) != SELECTOR_SUCCESS) {
         return ERROR;

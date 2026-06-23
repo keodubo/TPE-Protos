@@ -19,6 +19,15 @@ int main(void) {
     CHECK(users_add("user", "pass"), "1: alta de user:pass");
     CHECK(users_count() == 1, "1: count = 1");
     CHECK(users_validate("user", "pass"), "1: valida credencial correcta");
+    CHECK(users_validate_len("user", 4, "pass", 4),
+          "1: valida credencial length-aware correcta");
+
+    const char name_with_nul[] = {'u','s','e','r','\0','x'};
+    const char pass_with_nul[] = {'p','a','s','s','\0','x'};
+    CHECK(!users_validate_len(name_with_nul, sizeof(name_with_nul), "pass", 4),
+          "1: rechaza nombre con NUL embebido");
+    CHECK(!users_validate_len("user", 4, pass_with_nul, sizeof(pass_with_nul)),
+          "1: rechaza pass con NUL embebido");
 
     /* --- 2: contraseña incorrecta / usuario inexistente --- */
     CHECK(!users_validate("user", "WRONG"), "2: rechaza pass incorrecta");
