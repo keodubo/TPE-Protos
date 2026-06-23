@@ -13,6 +13,7 @@
 #include <stdint.h>   // uint8_t (buffer.h lo usa pero no lo incluye)
 #include <stdbool.h>
 #include <errno.h>
+#include <fcntl.h>    // fcntl, FD_CLOEXEC
 #include <unistd.h>   // close
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -220,6 +221,9 @@ socksv5_passive_accept(struct selector_key *key) {
         goto fail;
     }
     if (selector_fd_set_nio(client) == -1) {
+        goto fail;
+    }
+    if (fcntl(client, F_SETFD, FD_CLOEXEC) == -1) {
         goto fail;
     }
     state = socks5_new(client);
@@ -510,6 +514,9 @@ request_process(struct selector_key *key) {
     struct request_st *d = &s->client.request;
     uint8_t            rep = REQUEST_REP_GENERAL_FAILURE;
 
+    // Una referencia por fd registrado: este ++ corresponde al origin_fd que se
+    // está por registrar, y se libera con su socksv5_close eventual. Si el connect
+    // inmediato falla (sin registrar el fd), el socks5_destroy(s) de abajo lo retracta.
     s->references++;
     if (request_connect_ipv4(key->s, &socks5_origin_handler, s,
                              &d->parser.request, &s->origin_fd, &rep) == -1) {
@@ -585,18 +592,20 @@ request_connecting_read(struct selector_key *key) {
     size_t   count;
     uint8_t *ptr = buffer_write_ptr(d->rb, &count);
     if (count == 0) {
-        if (client_set_interest(key, OP_NOOP) != SELECTOR_SUCCESS) {
-            return ERROR;
-        }
-        return REQUEST_CONNECTING;
+        // Buffer lleno durante el connect: parkear el cliente en OP_NOOP
+        // escondería un EOF posterior hasta que el connect resuelva/timeout del
+        // SO (retención de fds, vector DoS con destinos blackhole). En M3 no hay
+        // relay y el payload temprano se descarta igual, así que cerramos limpio.
+        return DONE;
     }
 
     const ssize_t n = recv(key->fd, ptr, count, 0);
     if (n > 0) {
         buffer_write_adv(d->rb, n);
-        if (!buffer_can_write(d->rb)
-                && client_set_interest(key, OP_NOOP) != SELECTOR_SUCCESS) {
-            return ERROR;
+        if (!buffer_can_write(d->rb)) {
+            // Ver arriba: no parkeamos el cliente en OP_NOOP durante el connect
+            // para no esconder un EOF posterior; cerramos limpio en su lugar.
+            return DONE;
         }
         return REQUEST_CONNECTING;
     }
@@ -629,6 +638,10 @@ request_connecting(struct selector_key *key) {
             memset(&bound, 0, sizeof(bound));
             bound.sin_family = AF_INET;
         }
+        // El origin_fd se deja registrado en OP_NOOP a propósito, parkeado para la
+        // fase COPY de M4. El interés del cliente se arma vía request_reply ->
+        // client_set_interest, que resuelve s->client_fd (NO key->fd): durante
+        // REQUEST_CONNECTING el key activo es el del origin_fd, no el del cliente.
         if (selector_set_interest_key(key, OP_NOOP) != SELECTOR_SUCCESS) {
             return ERROR;
         }
@@ -758,6 +771,9 @@ socksv5_close(struct selector_key *key) {
 static void
 socksv5_done(struct selector_key *key) {
     DBG("[conn #%u] cierre", ATTACHMENT(key)->id);
+    // Snapshot de ambos fds ANTES del loop de unregister, a propósito:
+    // selector_unregister_fd dispara socksv5_close, que muta los campos fd del
+    // struct y puede devolverlo al pool; iterar sobre los campos vivos sería inseguro.
     const int fds[] = {
         ATTACHMENT(key)->client_fd,
         ATTACHMENT(key)->origin_fd,

@@ -6,10 +6,6 @@
 #include "selector.h"
 #include "request.h"
 
-#define REQUEST_REP_NETWORK_UNREACHABLE     0x03
-#define REQUEST_REP_HOST_UNREACHABLE        0x04
-#define REQUEST_REP_CONNECTION_REFUSED      0x05
-
 uint8_t
 request_connect_errno_rep(int error);
 

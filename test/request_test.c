@@ -181,6 +181,30 @@ main(void) {
         CHECK(buffer_read(&b) == 0xAB, "9: byte preservado = 0xAB");
     }
 
+    /* --- 10: tras ERROR final, los bytes extra siguen en el buffer --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[16]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        /* ATYP=0x03 fuerza error en el byte de ATYP (el ultimo antes del
+         * extra); el consume corta ahi, dejando solo 0xAB sin consumir. */
+        uint8_t req[] = { 0x05, 0x01, 0x00, 0x03, 0xAB };
+        fill(&b, req, sizeof(req));
+        bool err = false;
+        enum request_state st = request_consume(&b, &p, &err);
+        CHECK(err && request_is_done(st, &err), "10: ATYP=0x03 marca error final");
+        CHECK(request_state_rep(st) == 0x08, "10: REP address type not supported");
+        CHECK(buffer_can_read(&b), "10: el byte extra sigue en el buffer tras error");
+        CHECK(buffer_read(&b) == 0xAB, "10: byte preservado tras error = 0xAB");
+    }
+
+    /* --- 11: marshall sin espacio (<10 bytes libres) devuelve -1 --- */
+    {
+        uint8_t raw[9]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        int n = request_marshall(&b, 0x00, NULL);
+        CHECK(n == -1, "11: marshall devuelve -1 sin espacio (<10 libres)");
+        CHECK(!buffer_can_read(&b), "11: no escribio bytes en el buffer");
+    }
+
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

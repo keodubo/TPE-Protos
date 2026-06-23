@@ -2,6 +2,7 @@
  * connect.c - helper para CONNECT IPv4 no bloqueante (M3).
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -53,6 +54,14 @@ request_connect_ipv4(fd_selector s,
     }
 
     if (selector_fd_set_nio(fd) == -1) {
+        if (rep != NULL) {
+            *rep = REQUEST_REP_GENERAL_FAILURE;
+        }
+        close(fd);
+        return -1;
+    }
+
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
         if (rep != NULL) {
             *rep = REQUEST_REP_GENERAL_FAILURE;
         }

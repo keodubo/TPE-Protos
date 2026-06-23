@@ -13,9 +13,10 @@
 #define IO_BUFFER_SIZE 4096
 #endif
 
-/* piso de cordura: la respuesta del HELLO necesita al menos 2 bytes. */
-#if IO_BUFFER_SIZE < 2
-#error "IO_BUFFER_SIZE debe ser >= 2"
+/* piso de cordura: la respuesta del REQUEST (IPv4) necesita 10 bytes libres;
+ * con menos, request_marshall() falla y el server cerraría sin responder. */
+#if IO_BUFFER_SIZE < 10
+#error "IO_BUFFER_SIZE debe ser >= 10"
 #endif
 
 /** handler del socket pasivo SOCKS: acepta la conexión y arranca la stm */
