@@ -18,7 +18,6 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <fcntl.h>    // fcntl, FD_CLOEXEC
-#include <pthread.h>
 #include <unistd.h>   // close
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -48,7 +47,6 @@
 static struct socks5  *pool      = NULL;
 static unsigned        pool_size = 0;
 static const unsigned  max_pool  = 50;
-static pthread_mutex_t pool_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /** contador de conexiones (para identificarlas en los logs) */
 static unsigned        conn_counter = 0;
@@ -122,7 +120,6 @@ static unsigned auth_to_request(struct selector_key *key);
 static struct socks5 *
 socks5_new(const int client_fd) {
     struct socks5 *ret;
-    pthread_mutex_lock(&pool_mutex);
     if (pool == NULL) {
         ret = malloc(sizeof(*ret));
     } else {
@@ -130,7 +127,6 @@ socks5_new(const int client_fd) {
         pool      = pool->next;
         pool_size--;
     }
-    pthread_mutex_unlock(&pool_mutex);
     if (ret == NULL) {
         return NULL;
     }
@@ -158,16 +154,15 @@ socks5_resolution_clear(struct socks5 *s) {
     }
 }
 
-// f13: references es _Atomic (socks5.h). socks5_ref/unref se invocan desde el
-// hilo principal y desde el hilo DNS (resolv.c), así que el inc/dec va por
-// fetch_add/fetch_sub para evitar el data race (UB en C11). El reciclaje al pool
-// (pool/pool_size) lo hace SIEMPRE el último que decrementa; en operación normal
-// el cliente queda en OP_NOOP durante REQUEST_RESOLV y el hilo DNS nunca es la
-// última referencia, así que el toque al pool global ocurre en el hilo principal.
+// D9 (purista): references y el pool (pool/pool_size) los toca SOLO el hilo
+// principal. La referencia del DNS se toma en resolv_dispatch y se libera en el
+// cleanup del job (resolv_cleanup), ambos en el hilo principal; el hilo de
+// getaddrinfo nunca toca el refcount ni el pool. Por eso el inc/dec es ++/--
+// plano y el reciclaje al pool no necesita mutex.
 void
 socks5_ref(struct socks5 *s) {
     if (s != NULL) {
-        atomic_fetch_add(&s->references, 1);
+        s->references++;
     }
 }
 
@@ -176,26 +171,20 @@ socks5_unref(struct socks5 *s) {
     if (s == NULL) {
         return;
     }
-    // fetch_sub devuelve el valor previo: si era 1, este fue el último ref.
-    if (atomic_fetch_sub(&s->references, 1) == 1) {
+    if (--s->references == 0) {
         socks5_resolution_clear(s);
-        pthread_mutex_lock(&pool_mutex);
         if (pool_size < max_pool) {
             s->next    = pool;
             pool       = s;
             pool_size++;
         } else {
-            pthread_mutex_unlock(&pool_mutex);
             free(s);
-            return;
         }
-        pthread_mutex_unlock(&pool_mutex);
     }
 }
 
 void
 socksv5_pool_destroy(void) {
-    pthread_mutex_lock(&pool_mutex);
     struct socks5 *next, *s = pool;
     while (s != NULL) {
         next = s->next;
@@ -205,7 +194,6 @@ socksv5_pool_destroy(void) {
     }
     pool      = NULL;
     pool_size = 0;
-    pthread_mutex_unlock(&pool_mutex);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

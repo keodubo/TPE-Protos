@@ -1,7 +1,6 @@
 #ifndef SOCKS5_H_TPE_SOCKS5
 #define SOCKS5_H_TPE_SOCKS5
 
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <netdb.h>
@@ -121,11 +120,12 @@ struct socks5 {
     buffer                  write_buffer;
 
     /*
-     * f13: el refcount lo tocan el hilo principal y el hilo DNS (resolv.c).
-     * _Atomic + fetch_add/fetch_sub evita el data race (UB en C11). El reciclaje
-     * al pool sólo lo hace el hilo principal (ver socks5_unref).
+     * D9 (purista): el refcount lo toca SOLO el hilo principal. La referencia del
+     * DNS se toma en resolv_dispatch y se libera en el cleanup del job (ambos en
+     * el hilo principal); el hilo de getaddrinfo nunca toca references ni el pool.
+     * Por eso es un unsigned plano, sin _Atomic ni mutex.
      */
-    _Atomic unsigned        references;
+    unsigned                references;
     struct socks5          *next;
 };
 

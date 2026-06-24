@@ -1,5 +1,6 @@
 #include <netdb.h>
 #include <pthread.h>
+#include <assert.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -29,35 +30,33 @@ struct resolv_args {
  * ya liberado, y al hacer su socks5_unref() final re-encolaria el objeto en un
  * pool ya destruido -> leak. El contador se incrementa al despachar el hilo y
  * se decrementa recien cuando el hilo termino TODO su trabajo (incluido el
- * notify_block y el unref), de modo que count==0 garantiza que ningun hilo
- * sigue tocando ni el selector ni el objeto socks5.
+ * notify_block), de modo que count==0 garantiza que ningun hilo sigue tocando ni
+ * el selector ni el objeto socks5.
+ *
+ * D9 (purista): el contador lo tocan SOLO funciones del hilo principal:
+ * resolv_pending_inc() en resolv_dispatch, resolv_pending_dec() en resolv_cleanup
+ * (que corre como cleanup del job, en el hilo del selector) y resolv_pending_count()
+ * en el drenaje de main.c. El hilo de getaddrinfo NO lo toca, asi que es un
+ * unsigned plano, sin mutex.
  */
-static pthread_mutex_t resolv_pending_mutex = PTHREAD_MUTEX_INITIALIZER;
-static unsigned        resolv_pending       = 0;
+static unsigned        resolv_pending = 0;
 
 static void
 resolv_pending_inc(void) {
-    pthread_mutex_lock(&resolv_pending_mutex);
     resolv_pending++;
-    pthread_mutex_unlock(&resolv_pending_mutex);
 }
 
 static void
 resolv_pending_dec(void) {
-    pthread_mutex_lock(&resolv_pending_mutex);
     if (resolv_pending > 0) {
         resolv_pending--;
     }
-    pthread_mutex_unlock(&resolv_pending_mutex);
 }
 
 /* Cantidad de hilos DNS aun en vuelo. Lo consume main.c al apagar. */
 unsigned
 resolv_pending_count(void) {
-    pthread_mutex_lock(&resolv_pending_mutex);
-    const unsigned n = resolv_pending;
-    pthread_mutex_unlock(&resolv_pending_mutex);
-    return n;
+    return resolv_pending;
 }
 
 static void
@@ -86,36 +85,31 @@ resolv_blocking(void *data) {
     }
 
     /*
-     * Precondicion (f14): el selector NO debe ser destruido mientras este hilo
-     * siga vivo. El bucle principal lo garantiza drenando resolv_pending_count()
-     * hasta 0 antes de selector_destroy()/socksv5_pool_destroy() (ver main.c).
-     * El unref y el decremento de pending viajan como cleanup del job y corren
-     * en el hilo principal, incluso si el fd fue cerrado/reutilizado.
+     * D9 (purista): este hilo NO toca estado compartido (ni references, ni el
+     * pool, ni el contador resolv_pending). Solo escribio el resultado arriba y
+     * ahora notifica al hilo principal. TODO el lifetime (unref + pending_dec)
+     * viaja como cleanup del job y corre en el hilo principal (resolv_cleanup),
+     * incluso si el fd fue cerrado/reutilizado.
      *
-     * Suposicion notify-por-fd (f15): selector_notify_block() despacha el block
-     * por numero de fd, no por objeto. Si el cliente se desconectara durante
-     * getaddrinfo, su fd podria reasignarse a otra conexion antes de procesar
-     * el job; handle_block_notifications() guarda con ITEM_USED (no crashea),
-     * pero el refcount mantiene vivo el objeto correcto. Ventana estrecha
-     * (requiere reuso exacto del fd en el mismo ciclo de select) se mitiga con
-     * selector_notify_block_with_data(): el selector sólo despacha si el item
-     * actual del fd sigue apuntando al mismo struct socks5.
+     * Identidad por objeto (f15): selector_notify_block_reserved despacha el block
+     * SOLO si el fd sigue mapeado al MISMO struct socks5 (args->socks). Si el
+     * cliente se desconecto y el fd se reasigno, el handle_block no se dispara,
+     * pero el cleanup del job igual corre y libera la referencia.
+     *
+     * Contrato de drenaje (f14, D9.3): main.c no destruye el selector mientras
+     * resolv_pending_count() > 0, y este hilo esta contado. Como client_fd se
+     * capturo valido en el dispatch y fd_size solo crece, notify_block_reserved
+     * NO puede fallar mientras el selector exista -> el fallo es INALCANZABLE.
+     * Lo afirmamos con assert para documentar el invariante, sin que el hilo DNS
+     * toque pool/refcount.
      */
     const selector_status st = selector_notify_block_reserved(args->selector,
                                                               args->client_fd,
                                                               args->socks,
                                                               resolv_cleanup,
                                                               args->job);
-    if (st != SELECTOR_SUCCESS) {
-        /*
-         * Fallback raro (selector destruido/corrupto pese al contrato de drenaje):
-         * no podemos dejar pending colgado. Soltamos la ref acá; socks5_unref
-         * protege el pool con mutex.
-         */
-        selector_block_job_free(args->job);
-        socks5_unref(args->socks);
-        resolv_pending_dec();
-    }
+    assert(st == SELECTOR_SUCCESS);
+    (void) st;
     free(args);
     return NULL;
 }

@@ -41,8 +41,11 @@ struct parser_state_transition {
     void    (*act2)(struct parser_event *ret, const uint8_t c);
 };
 
-/** predicado para utilizar en `when' que retorna siempre true */
-static const unsigned ANY = 1 << 9;
+/* predicado para utilizar en `when' que retorna siempre true.
+ * Fix toolkit (D6): era `unsigned`, pero `when` (arriba) es `int`; en gcc con
+ * -Wextra `state[i].when == ANY` disparaba -Wsign-compare (parser.c). Se alinea
+ * el tipo a `int` (1<<9 = 512 entra de sobra) para build limpio en pampero. */
+static const int ANY = 1 << 9;
 
 /** declaración completa de una máquina de estados */
 struct parser_definition {
