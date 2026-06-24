@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <netdb.h>
 #include <sys/socket.h>
 
 #include "auth.h"
@@ -19,6 +20,7 @@ enum socks_v5state {
     AUTH_READ,
     AUTH_WRITE,
     REQUEST_READ,
+    REQUEST_RESOLV,
     REQUEST_CONNECTING,
     REQUEST_WRITE,
     COPY,
@@ -51,6 +53,11 @@ struct connecting_st {
     uint8_t                rep;
 };
 
+struct resolv_st {
+    bool                   started;
+    int                    gai_error;
+};
+
 struct socks5 {
     int                     client_fd;
     int                     origin_fd;
@@ -68,8 +75,12 @@ struct socks5 {
     } client;
 
     struct connecting_st    connecting;
+    struct resolv_st        resolv;
     struct copy             copy_client;
     struct copy             copy_origin;
+
+    struct addrinfo        *origin_resolution;
+    struct addrinfo        *current_resolution;
 
     uint8_t                 raw_buff_a[IO_BUFFER_SIZE];
     uint8_t                 raw_buff_b[IO_BUFFER_SIZE];
@@ -79,5 +90,8 @@ struct socks5 {
     unsigned                references;
     struct socks5          *next;
 };
+
+void socks5_ref(struct socks5 *s);
+void socks5_unref(struct socks5 *s);
 
 #endif

@@ -28,6 +28,7 @@
 #include "request.h"
 #include "connect.h"
 #include "copy.h"
+#include "resolv.h"
 #include "users.h"
 #include "dbg.h"
 #include "socks5.h"
@@ -83,11 +84,28 @@ socks5_new(const int client_fd) {
 }
 
 static void
-socks5_destroy(struct socks5 *s) {
+socks5_resolution_clear(struct socks5 *s) {
+    if (s->origin_resolution != NULL) {
+        freeaddrinfo(s->origin_resolution);
+        s->origin_resolution = NULL;
+        s->current_resolution = NULL;
+    }
+}
+
+void
+socks5_ref(struct socks5 *s) {
+    if (s != NULL) {
+        s->references++;
+    }
+}
+
+void
+socks5_unref(struct socks5 *s) {
     if (s == NULL) {
         return;
     }
     if (s->references == 1) {
+        socks5_resolution_clear(s);
         if (pool_size < max_pool) {
             s->next    = pool;
             pool       = s;
@@ -105,6 +123,7 @@ socksv5_pool_destroy(void) {
     struct socks5 *next, *s = pool;
     while (s != NULL) {
         next = s->next;
+        socks5_resolution_clear(s);
         free(s);
         s = next;
     }
@@ -118,13 +137,14 @@ socksv5_pool_destroy(void) {
 // Handlers de selección de una conexión establecida
 static void socksv5_read (struct selector_key *key);
 static void socksv5_write(struct selector_key *key);
+static void socksv5_block(struct selector_key *key);
 static void socksv5_close(struct selector_key *key);
 
 static const struct fd_handler socks5_handler = {
     .handle_read  = socksv5_read,
     .handle_write = socksv5_write,
     .handle_close = socksv5_close,
-    .handle_block = NULL,
+    .handle_block = socksv5_block,
 };
 
 static const struct fd_handler socks5_origin_handler = {
@@ -177,7 +197,7 @@ fail:
     if (client != -1) {
         close(client);
     }
-    socks5_destroy(state);
+    socks5_unref(state);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -397,7 +417,7 @@ auth_write(struct selector_key *key) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// REQUEST + CONNECT IPv4 literal (RFC1928 §4-§6)
+// REQUEST + CONNECT (RFC1928 §4-§6)
 
 static selector_status
 client_set_interest(struct selector_key *key, const fd_interest interest) {
@@ -411,11 +431,11 @@ client_set_interest(struct selector_key *key, const fd_interest interest) {
 static unsigned
 request_reply(struct selector_key *key,
               const uint8_t rep,
-              const struct sockaddr_in *bound_addr) {
+              const struct sockaddr *bound_addr) {
     struct request_st *d = &ATTACHMENT(key)->client.request;
     d->rep = rep;
     buffer_reset(d->wb);
-    if (request_marshall(d->wb, rep, bound_addr) == -1
+    if (request_marshall_addr(d->wb, rep, bound_addr) == -1
             || client_set_interest(key, OP_WRITE) != SELECTOR_SUCCESS) {
         return ERROR;
     }
@@ -435,32 +455,107 @@ request_read_init(const unsigned state, struct selector_key *key) {
     d->initialized = true;
     request_parser_init(&d->parser);
     buffer_reset(d->wb);
+    ATTACHMENT(key)->resolv.started = false;
+    ATTACHMENT(key)->resolv.gai_error = 0;
+}
+
+static int
+request_start_connect(struct selector_key *key,
+                      const struct sockaddr *addr,
+                      const socklen_t addr_len,
+                      const int family,
+                      const int socktype,
+                      const int protocol,
+                      uint8_t *rep) {
+    struct socks5 *s = ATTACHMENT(key);
+
+    if (request_connect_addr(key->s, &socks5_origin_handler, s, addr, addr_len,
+                             family, socktype, protocol, &s->origin_fd, rep)
+            == -1) {
+        return -1;
+    }
+
+    socks5_ref(s);
+    if (client_set_interest(key, OP_READ) != SELECTOR_SUCCESS) {
+        (void) selector_unregister_fd(key->s, s->origin_fd);
+        return -2;
+    }
+    s->connecting.rep = REQUEST_REP_GENERAL_FAILURE;
+    DBG("[conn #%u] request: connect en progreso fd=%d", s->id, s->origin_fd);
+    return 0;
+}
+
+static unsigned
+request_connect_sockaddr(struct selector_key *key,
+                         const struct sockaddr *addr,
+                         const socklen_t addr_len,
+                         const int family,
+                         const int socktype,
+                         const int protocol) {
+    uint8_t rep = REQUEST_REP_GENERAL_FAILURE;
+    const int ret = request_start_connect(key, addr, addr_len, family, socktype,
+                                          protocol, &rep);
+    if (ret == -2) {
+        return ERROR;
+    }
+    if (ret == -1) {
+        return request_reply(key, rep, NULL);
+    }
+    return REQUEST_CONNECTING;
+}
+
+static unsigned
+request_connect_next(struct selector_key *key) {
+    struct socks5 *s = ATTACHMENT(key);
+
+    while (s->current_resolution != NULL) {
+        const struct addrinfo *ai = s->current_resolution;
+        s->current_resolution = s->current_resolution->ai_next;
+        if (ai->ai_family != AF_INET && ai->ai_family != AF_INET6) {
+            continue;
+        }
+        const int ret = request_start_connect(key, ai->ai_addr,
+                                              (socklen_t) ai->ai_addrlen,
+                                              ai->ai_family, ai->ai_socktype,
+                                              ai->ai_protocol,
+                                              &s->connecting.rep);
+        if (ret == 0) {
+            return REQUEST_CONNECTING;
+        }
+        if (ret == -2) {
+            return ERROR;
+        }
+    }
+    return request_reply(key, s->connecting.rep, NULL);
 }
 
 static unsigned
 request_process(struct selector_key *key) {
-    struct socks5     *s = ATTACHMENT(key);
-    struct request_st *d = &s->client.request;
-    uint8_t            rep = REQUEST_REP_GENERAL_FAILURE;
+    struct request_st     *d = &ATTACHMENT(key)->client.request;
+    const struct request  *r = &d->parser.request;
 
-    // Una referencia por fd registrado: este ++ corresponde al origin_fd que se
-    // está por registrar, y se libera con su socksv5_close eventual. Si el connect
-    // inmediato falla (sin registrar el fd), el socks5_destroy(s) de abajo lo retracta.
-    s->references++;
-    if (request_connect_ipv4(key->s, &socks5_origin_handler, s,
-                             &d->parser.request, &s->origin_fd, &rep) == -1) {
-        socks5_destroy(s);  // deshace la referencia especulativa del origin_fd
-        DBG("[conn #%u] request: connect inmediato falla -> REP 0x%02x",
-            s->id, rep);
-        return request_reply(key, rep, NULL);
+    if (r->atyp == REQUEST_ATYP_IPV4) {
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        memcpy(&addr.sin_addr.s_addr, r->dst_addr, 4);
+        addr.sin_port = r->dst_port;
+        return request_connect_sockaddr(key, (struct sockaddr *) &addr, sizeof(addr),
+                                        AF_INET, SOCK_STREAM, IPPROTO_TCP);
     }
-
-    if (client_set_interest(key, OP_READ) != SELECTOR_SUCCESS) {
-        return ERROR;
+    if (r->atyp == REQUEST_ATYP_IPV6) {
+        struct sockaddr_in6 addr6;
+        memset(&addr6, 0, sizeof(addr6));
+        addr6.sin6_family = AF_INET6;
+        memcpy(&addr6.sin6_addr, r->dst_addr, 16);
+        addr6.sin6_port = r->dst_port;
+        return request_connect_sockaddr(key, (struct sockaddr *) &addr6, sizeof(addr6),
+                                        AF_INET6, SOCK_STREAM, IPPROTO_TCP);
     }
-    s->connecting.rep = REQUEST_REP_GENERAL_FAILURE;
-    DBG("[conn #%u] request: connect en progreso fd=%d", s->id, s->origin_fd);
-    return REQUEST_CONNECTING;
+    if (r->atyp == REQUEST_ATYP_DOMAINNAME) {
+        return REQUEST_RESOLV;
+    }
+    return request_reply(key, REQUEST_REP_ATYP_NOT_SUPPORTED, NULL);
 }
 
 static unsigned
@@ -514,6 +609,39 @@ request_read(struct selector_key *key) {
     return request_drive(key);
 }
 
+static void
+request_resolv_init(const unsigned state, struct selector_key *key) {
+    (void) state;
+    struct socks5     *s = ATTACHMENT(key);
+    struct request_st *d = &s->client.request;
+
+    if (s->resolv.started) {
+        return;
+    }
+    s->resolv.started = true;
+    if (client_set_interest(key, OP_NOOP) != SELECTOR_SUCCESS
+            || resolv_dispatch(key, d->parser.request.dst_fqdn,
+                               d->parser.request.dst_port) == -1) {
+        s->resolv.gai_error = EAI_FAIL;
+        (void) selector_notify_block(key->s, s->client_fd);
+    }
+}
+
+static unsigned
+request_resolv_done(struct selector_key *key) {
+    struct socks5 *s = ATTACHMENT(key);
+
+    if (s->resolv.gai_error != 0 || s->origin_resolution == NULL) {
+        DBG("[conn #%u] request: resolucion falla gai=%d",
+            s->id, s->resolv.gai_error);
+        return request_reply(key, REQUEST_REP_HOST_UNREACHABLE, NULL);
+    }
+    s->current_resolution = s->origin_resolution;
+    s->connecting.rep = REQUEST_REP_HOST_UNREACHABLE;
+    DBG("[conn #%u] request: resolucion OK", s->id);
+    return request_connect_next(key);
+}
+
 static unsigned
 request_connecting_read(struct selector_key *key) {
     struct request_st *d = &ATTACHMENT(key)->client.request;
@@ -555,14 +683,13 @@ request_connecting(struct selector_key *key) {
     }
 
     if (so_error == 0) {
-        struct sockaddr_in bound;
-        socklen_t          bound_len = sizeof(bound);
+        struct sockaddr_storage bound;
+        socklen_t               bound_len = sizeof(bound);
         memset(&bound, 0, sizeof(bound));
-        bound.sin_family = AF_INET;
         if (getsockname(key->fd, (struct sockaddr *) &bound, &bound_len) == -1
-                || bound.sin_family != AF_INET) {
+                || (bound.ss_family != AF_INET && bound.ss_family != AF_INET6)) {
             memset(&bound, 0, sizeof(bound));
-            bound.sin_family = AF_INET;
+            bound.ss_family = AF_INET;
         }
         // El origin_fd se deja registrado en OP_NOOP a propósito, parkeado para la
         // fase COPY de M4. El interés del cliente se arma vía request_reply ->
@@ -572,8 +699,10 @@ request_connecting(struct selector_key *key) {
             return ERROR;
         }
         s->connecting.rep = REQUEST_REP_SUCCEEDED;
+        socks5_resolution_clear(s);
         DBG("[conn #%u] request: connect OK", s->id);
-        return request_reply(key, REQUEST_REP_SUCCEEDED, &bound);
+        return request_reply(key, REQUEST_REP_SUCCEEDED,
+                             (const struct sockaddr *) &bound);
     }
 
     s->connecting.rep = request_connect_errno_rep(so_error);
@@ -582,6 +711,9 @@ request_connecting(struct selector_key *key) {
     if (s->origin_fd != -1
             && selector_unregister_fd(key->s, s->origin_fd) != SELECTOR_SUCCESS) {
         return ERROR;
+    }
+    if (s->current_resolution != NULL) {
+        return request_connect_next(key);
     }
     return request_reply(key, s->connecting.rep, NULL);
 }
@@ -629,6 +761,10 @@ static const struct state_definition client_statbl[] = {
         .on_arrival    = request_read_init,
         .on_read_ready = request_read,
     }, {
+        .state          = REQUEST_RESOLV,
+        .on_arrival     = request_resolv_init,
+        .on_block_ready = request_resolv_done,
+    }, {
         .state          = REQUEST_CONNECTING,
         .on_read_ready  = request_connecting_read,
         .on_write_ready = request_connecting,
@@ -675,6 +811,15 @@ socksv5_write(struct selector_key *key) {
 }
 
 static void
+socksv5_block(struct selector_key *key) {
+    struct state_machine     *stm = &ATTACHMENT(key)->stm;
+    const enum socks_v5state  st  = stm_handler_block(stm, key);
+    if (st == ERROR || st == DONE) {
+        socksv5_done(key);
+    }
+}
+
+static void
 socksv5_close(struct selector_key *key) {
     // El cierre del fd se centraliza en handle_close: así también se cierran
     // los fds de conexiones activas durante el apagado (selector_destroy ->
@@ -687,7 +832,7 @@ socksv5_close(struct selector_key *key) {
         s->origin_fd = -1;
     }
     close(key->fd);
-    socks5_destroy(s);
+    socks5_unref(s);
 }
 
 static void

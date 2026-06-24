@@ -14,7 +14,7 @@
 # Batería de tráfico (cada caso recorre un teardown distinto):
 #   - N CONNECT IPv4 exitosos (secuenciales + concurrentes) -> reuso del pool
 #   - CONNECT a puerto cerrado -> connect async falla (REP 0x05) + unregister
-#   - CMD no soportado (0x07) y ATYP FQDN (0x08) -> error antes de crear origin fd
+#   - CMD no soportado (0x07), ATYP invalido (0x08) y FQDN localhost
 #   - HELLO+AUTH+REQUEST pipelined con payload temprano
 #   - cierres abruptos del cliente en CADA estado (HELLO, AUTH, REQUEST parcial,
 #     post-reply)
@@ -163,9 +163,12 @@ ths = [threading.Thread(target=lambda: full(mkreq(0x01, 0x01, dport=org.port))) 
 # refused: puerto cerrado -> connect async falla -> REP 0x05 + unregister origin
 full(mkreq(0x01, 0x01, dport=unused_port())); n += 1
 
-# CMD no soportado (0x07) y ATYP FQDN (0x08): error antes de crear el origin fd
+# CMD no soportado (0x07) y ATYP invalido (0x08): error antes de crear el origin fd
 full(mkreq(0x02, 0x01)); n += 1
-full(mkreq(0x01, 0x03, dport=80)); n += 1
+full(mkreq(0x01, 0x09, dport=80)); n += 1
+
+# FQDN localhost: ejercita pthread getaddrinfo + notify_block + connect
+full(mkreq(0x01, 0x03, dport=org.port, fqdn=b"localhost")); n += 1
 
 # pipelined HELLO+AUTH+REQUEST + payload temprano
 s = conn()

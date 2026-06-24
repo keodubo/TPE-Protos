@@ -1,6 +1,6 @@
 /*
  * request.c - parser/serializador del REQUEST SOCKS5 (RFC1928).
- * Maquina de bytes a mano, sin I/O. M3 solo soporta CONNECT + IPv4.
+ * Maquina de bytes a mano, sin I/O.
  */
 #include <string.h>
 
@@ -38,14 +38,39 @@ request_parser_feed(struct request_parser *p, const uint8_t b) {
             p->request.atyp = b;
             if (b == REQUEST_ATYP_IPV4) {
                 p->addr_idx = 0;
+                p->request.dst_addr_len = 4;
                 p->state    = request_dst_addr;
+            } else if (b == REQUEST_ATYP_IPV6) {
+                p->addr_idx = 0;
+                p->request.dst_addr_len = 16;
+                p->state    = request_dst_addr;
+            } else if (b == REQUEST_ATYP_DOMAINNAME) {
+                p->state = request_fqdn_len;
             } else {
                 p->state = request_error_unsupported_atyp;
             }
             break;
+        case request_fqdn_len:
+            p->request.dst_fqdn_len = b;
+            p->request.dst_addr_len = b;
+            p->addr_idx = 0;
+            if (b == 0) {
+                p->state = request_error_unsupported_atyp;
+            } else {
+                p->state = request_dst_addr;
+            }
+            break;
         case request_dst_addr:
-            p->request.dst_addr[p->addr_idx++] = b;
-            if (p->addr_idx == sizeof(p->request.dst_addr)) {
+            if (p->request.atyp == REQUEST_ATYP_DOMAINNAME) {
+                p->request.dst_fqdn[p->addr_idx] = (char)b;
+            } else {
+                p->request.dst_addr[p->addr_idx] = b;
+            }
+            p->addr_idx++;
+            if (p->addr_idx == p->request.dst_addr_len) {
+                if (p->request.atyp == REQUEST_ATYP_DOMAINNAME) {
+                    p->request.dst_fqdn[p->addr_idx] = '\0';
+                }
                 p->state = request_dst_port_high;
             }
             break;
@@ -116,8 +141,8 @@ request_state_rep(const enum request_state state) {
     }
 }
 
-int
-request_marshall(buffer *b, const uint8_t rep, const struct sockaddr_in *bound_addr) {
+static int
+request_marshall_ipv4(buffer *b, const uint8_t rep, const struct sockaddr_in *bound_addr) {
     size_t   n;
     uint8_t *p = buffer_write_ptr(b, &n);
     if (n < 10) {
@@ -136,4 +161,39 @@ request_marshall(buffer *b, const uint8_t rep, const struct sockaddr_in *bound_a
     }
     buffer_write_adv(b, 10);
     return 10;
+}
+
+static int
+request_marshall_ipv6(buffer *b, const uint8_t rep, const struct sockaddr_in6 *bound_addr) {
+    size_t   n;
+    uint8_t *p = buffer_write_ptr(b, &n);
+    if (n < 22) {
+        return -1;
+    }
+
+    p[0] = REQUEST_SOCKS_VERSION;
+    p[1] = rep;
+    p[2] = REQUEST_RSV;
+    p[3] = REQUEST_ATYP_IPV6;
+    if (bound_addr == NULL) {
+        memset(p + 4, 0, 18);
+    } else {
+        memcpy(p + 4, &bound_addr->sin6_addr, 16);
+        memcpy(p + 20, &bound_addr->sin6_port, 2);
+    }
+    buffer_write_adv(b, 22);
+    return 22;
+}
+
+int
+request_marshall(buffer *b, const uint8_t rep, const struct sockaddr_in *bound_addr) {
+    return request_marshall_ipv4(b, rep, bound_addr);
+}
+
+int
+request_marshall_addr(buffer *b, const uint8_t rep, const struct sockaddr *bound_addr) {
+    if (bound_addr != NULL && bound_addr->sa_family == AF_INET6) {
+        return request_marshall_ipv6(b, rep, (const struct sockaddr_in6 *)bound_addr);
+    }
+    return request_marshall_ipv4(b, rep, (const struct sockaddr_in *)bound_addr);
 }

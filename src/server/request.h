@@ -4,7 +4,7 @@
 /*
  * request.h - parser/serializador del REQUEST SOCKS5 (RFC1928).
  *
- * M3 estricto: parser incremental, sin I/O, solo ATYP=IPv4.
+ * Parser incremental, sin I/O. Soporta ATYP IPv4, FQDN e IPv6.
  * Cliente:  VER(0x05) CMD RSV(0x00) ATYP DST.ADDR DST.PORT
  * Servidor: VER(0x05) REP RSV(0x00) ATYP BND.ADDR BND.PORT
  */
@@ -17,7 +17,10 @@
 #define REQUEST_SOCKS_VERSION              0x05
 #define REQUEST_CMD_CONNECT                0x01
 #define REQUEST_ATYP_IPV4                  0x01
+#define REQUEST_ATYP_DOMAINNAME            0x03
+#define REQUEST_ATYP_IPV6                  0x04
 #define REQUEST_RSV                        0x00
+#define REQUEST_FQDN_MAX                   255
 
 #define REQUEST_REP_SUCCEEDED              0x00
 #define REQUEST_REP_GENERAL_FAILURE        0x01
@@ -31,8 +34,9 @@ enum request_state {
     request_version,                    /* espera VER (debe ser 0x05) */
     request_cmd,                        /* espera CMD (solo CONNECT) */
     request_rsv,                        /* espera RSV (debe ser 0x00) */
-    request_atyp,                       /* espera ATYP (solo IPv4) */
-    request_dst_addr,                   /* lee 4 bytes de DST.ADDR */
+    request_atyp,                       /* espera ATYP */
+    request_fqdn_len,                   /* lee longitud del FQDN */
+    request_dst_addr,                   /* lee DST.ADDR segun ATYP */
     request_dst_port_high,              /* lee byte alto de DST.PORT */
     request_dst_port_low,               /* lee byte bajo de DST.PORT */
     request_done,                       /* request completo */
@@ -45,7 +49,10 @@ enum request_state {
 struct request {
     uint8_t  cmd;
     uint8_t  atyp;
-    uint8_t  dst_addr[4];
+    uint8_t  dst_addr[16];
+    uint8_t  dst_addr_len;
+    char     dst_fqdn[REQUEST_FQDN_MAX + 1];
+    uint8_t  dst_fqdn_len;
     uint16_t dst_port;                  /* bytes en network byte order */
 };
 
@@ -72,7 +79,10 @@ bool request_is_done(enum request_state state, bool *errored);
 /** mapea el estado final a REP SOCKS5 */
 uint8_t request_state_rep(enum request_state state);
 
-/** serializa VER REP RSV ATYP BND.ADDR BND.PORT. Devuelve 10, o -1 sin espacio. */
+/** serializa reply IPv4. Devuelve 10, o -1 sin espacio. */
 int request_marshall(buffer *b, uint8_t rep, const struct sockaddr_in *bound_addr);
+
+/** serializa reply IPv4/IPv6 segun bound_addr. Devuelve bytes escritos, o -1. */
+int request_marshall_addr(buffer *b, uint8_t rep, const struct sockaddr *bound_addr);
 
 #endif

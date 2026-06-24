@@ -101,11 +101,11 @@ main(void) {
     {
         struct request_parser p; request_parser_init(&p);
         uint8_t raw[16]; buffer b; buffer_init(&b, sizeof(raw), raw);
-        uint8_t req[] = { 0x05, 0x01, 0x00, 0x03, 0x0B };
+        uint8_t req[] = { 0x05, 0x01, 0x00, 0x09 };
         fill(&b, req, sizeof(req));
         bool err = false;
         enum request_state st = request_consume(&b, &p, &err);
-        CHECK(err && request_is_done(st, &err), "4: ATYP=0x03 marca error");
+        CHECK(err && request_is_done(st, &err), "4: ATYP=0x09 marca error");
         CHECK(request_state_rep(st) == 0x08, "4: REP address type not supported");
     }
 
@@ -185,13 +185,13 @@ main(void) {
     {
         struct request_parser p; request_parser_init(&p);
         uint8_t raw[16]; buffer b; buffer_init(&b, sizeof(raw), raw);
-        /* ATYP=0x03 fuerza error en el byte de ATYP (el ultimo antes del
+        /* ATYP=0x09 fuerza error en el byte de ATYP (el ultimo antes del
          * extra); el consume corta ahi, dejando solo 0xAB sin consumir. */
-        uint8_t req[] = { 0x05, 0x01, 0x00, 0x03, 0xAB };
+        uint8_t req[] = { 0x05, 0x01, 0x00, 0x09, 0xAB };
         fill(&b, req, sizeof(req));
         bool err = false;
         enum request_state st = request_consume(&b, &p, &err);
-        CHECK(err && request_is_done(st, &err), "10: ATYP=0x03 marca error final");
+        CHECK(err && request_is_done(st, &err), "10: ATYP=0x09 marca error final");
         CHECK(request_state_rep(st) == 0x08, "10: REP address type not supported");
         CHECK(buffer_can_read(&b), "10: el byte extra sigue en el buffer tras error");
         CHECK(buffer_read(&b) == 0xAB, "10: byte preservado tras error = 0xAB");
@@ -203,6 +203,67 @@ main(void) {
         int n = request_marshall(&b, 0x00, NULL);
         CHECK(n == -1, "11: marshall devuelve -1 sin espacio (<10 libres)");
         CHECK(!buffer_can_read(&b), "11: no escribio bytes en el buffer");
+    }
+
+    /* --- 12: request FQDN valido CONNECT example.com:80 --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[64]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t req[] = {
+            0x05, 0x01, 0x00, 0x03, 0x0B,
+            'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm',
+            0x00, 0x50
+        };
+        fill(&b, req, sizeof(req));
+        bool err = false;
+        enum request_state st = request_consume(&b, &p, &err);
+        CHECK(!err && request_is_done(st, &err), "12: FQDN termina sin error");
+        CHECK(p.request.atyp == 0x03, "12: ATYP = FQDN");
+        CHECK(p.request.dst_fqdn_len == 11, "12: FQDN len = 11");
+        CHECK(strcmp(p.request.dst_fqdn, "example.com") == 0,
+              "12: FQDN queda NUL-terminado");
+        CHECK(port_has_bytes(p.request.dst_port, 0x00, 0x50),
+              "12: puerto 80 en network byte order");
+    }
+
+    /* --- 13: request IPv6 valido CONNECT ::1:8080 --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[64]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t req[] = {
+            0x05, 0x01, 0x00, 0x04,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            0x1F, 0x90
+        };
+        fill(&b, req, sizeof(req));
+        bool err = false;
+        enum request_state st = request_consume(&b, &p, &err);
+        CHECK(!err && request_is_done(st, &err), "13: IPv6 termina sin error");
+        CHECK(p.request.atyp == 0x04, "13: ATYP = IPv6");
+        CHECK(p.request.dst_addr_len == 16, "13: IPv6 len = 16");
+        CHECK(p.request.dst_addr[15] == 1, "13: IPv6 ::1 preservado");
+        CHECK(port_has_bytes(p.request.dst_port, 0x1F, 0x90),
+              "13: puerto 8080 en network byte order");
+    }
+
+    /* --- 14: marshall IPv6 success --- */
+    {
+        struct sockaddr_in6 bound;
+        memset(&bound, 0, sizeof(bound));
+        bound.sin6_family = AF_INET6;
+        bound.sin6_addr.s6_addr[15] = 1;
+        memcpy(&bound.sin6_port, (uint8_t[]){0x1F, 0x90}, 2);
+
+        uint8_t raw[32]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        int n = request_marshall_addr(&b, 0x00, (struct sockaddr *)&bound);
+        uint8_t expected[22] = {
+            0x05, 0x00, 0x00, 0x04,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            0x1F, 0x90
+        };
+        CHECK(n == 22, "14: marshall IPv6 escribe 22 bytes");
+        CHECK(buffer_matches(&b, expected, sizeof(expected)),
+              "14: respuesta IPv6 success exacta");
     }
 
     printf("\n%d checks, %d failures\n", checks, failures);

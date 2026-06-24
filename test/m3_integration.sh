@@ -179,11 +179,11 @@ check(hello + auth == b"\x05\x02\x01\x00", "C: handshake previo OK", (hello + au
 check(len(reply) == 10 and reply[1] == 0x07,
       "C: CMD unsupported -> REP 0x07", reply.hex(), "05 07 00 01 ...")
 
-fqdn_req = make_request(0x01, 0x03, port=80)
-hello, auth, reply = sequential_exchange(fqdn_req)
+bad_atyp_req = make_request(0x01, 0x09, port=80)
+hello, auth, reply = sequential_exchange(bad_atyp_req)
 check(hello + auth == b"\x05\x02\x01\x00", "D: handshake previo OK", (hello + auth).hex(), "05020100")
 check(len(reply) == 10 and reply[1] == 0x08,
-      "D: ATYP FQDN unsupported -> REP 0x08", reply.hex(), "05 08 00 01 ...")
+      "D: ATYP unsupported -> REP 0x08", reply.hex(), "05 08 00 01 ...")
 
 with Origin() as origin:
     req = make_request(0x01, 0x01, port=origin.port)
