@@ -7,6 +7,7 @@ SHARED_SOURCES=$(wildcard src/shared/*.c)
 SERVER_OBJECTS=$(SERVER_SOURCES:src/%.c=obj/%.o)
 CLIENT_OBJECTS=$(CLIENT_SOURCES:src/%.c=obj/%.o)
 SHARED_OBJECTS=$(SHARED_SOURCES:src/%.c=obj/%.o)
+DEP_FILES=$(SERVER_OBJECTS:.o=.d) $(CLIENT_OBJECTS:.o=.d) $(SHARED_OBJECTS:.o=.d)
 
 OUTPUT_FOLDER=./bin
 OBJECTS_FOLDER=./obj
@@ -30,7 +31,9 @@ obj/%.o: src/%.c
 	mkdir -p $(OBJECTS_FOLDER)/server
 	mkdir -p $(OBJECTS_FOLDER)/client
 	mkdir -p $(OBJECTS_FOLDER)/shared
-	$(COMPILER) $(COMPILER_FLAGS) -c $< -o $@
+	$(COMPILER) $(COMPILER_FLAGS) -MMD -MP -c $< -o $@
+
+-include $(DEP_FILES)
 
 # tests unitarios (harness plano en C, sin libcheck)
 TEST_HELLO=$(OUTPUT_FOLDER)/hello_test
@@ -38,13 +41,22 @@ TEST_DBG=$(OUTPUT_FOLDER)/dbg_test
 TEST_AUTH=$(OUTPUT_FOLDER)/auth_test
 TEST_USERS=$(OUTPUT_FOLDER)/users_test
 TEST_REQUEST=$(OUTPUT_FOLDER)/request_test
+TEST_CONNECT=$(OUTPUT_FOLDER)/connect_test
+TEST_COPY=$(OUTPUT_FOLDER)/copy_test
+TEST_NETUTILS=$(OUTPUT_FOLDER)/netutils_test
+TEST_SELECTOR_BLOCK=$(OUTPUT_FOLDER)/selector_block_test
 
-test: $(TEST_HELLO) $(TEST_DBG) $(TEST_AUTH) $(TEST_USERS) $(TEST_REQUEST)
+test: $(TEST_HELLO) $(TEST_DBG) $(TEST_AUTH) $(TEST_USERS) $(TEST_REQUEST) \
+      $(TEST_CONNECT) $(TEST_COPY) $(TEST_NETUTILS) $(TEST_SELECTOR_BLOCK)
 	$(TEST_HELLO)
 	$(TEST_DBG)
 	$(TEST_AUTH)
 	$(TEST_USERS)
 	$(TEST_REQUEST)
+	$(TEST_CONNECT)
+	$(TEST_COPY)
+	$(TEST_NETUTILS)
+	$(TEST_SELECTOR_BLOCK)
 
 $(TEST_AUTH): test/auth_test.c src/server/auth.c src/shared/buffer.c
 	mkdir -p $(OUTPUT_FOLDER)
@@ -57,6 +69,27 @@ $(TEST_USERS): test/users_test.c src/server/users.c
 $(TEST_REQUEST): test/request_test.c src/server/request.c src/shared/buffer.c
 	mkdir -p $(OUTPUT_FOLDER)
 	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_REQUEST)
+
+# connect_test sólo ejercita request_connect_errno_rep (lógica pura), pero
+# connect.c referencia selector_register/selector_fd_set_nio: hay que linkear
+# selector.c (símbolos sin resolver) y -pthread (LD_FLAGS), que selector usa.
+$(TEST_CONNECT): test/connect_test.c src/server/connect.c src/shared/selector.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $(LD_FLAGS) $^ -o $(TEST_CONNECT)
+
+# copy_test arma un selector real + socketpairs: linkea copy.c + selector.c +
+# buffer.c, con -pthread (selector usa pthread). No depende de socks5nio.c.
+$(TEST_COPY): test/copy_test.c src/server/copy.c src/shared/selector.c src/shared/buffer.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $(LD_FLAGS) $^ -o $(TEST_COPY)
+
+$(TEST_NETUTILS): test/netutils_test.c src/shared/netutils.c src/shared/buffer.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_NETUTILS)
+
+$(TEST_SELECTOR_BLOCK): test/selector_block_test.c src/shared/selector.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $(LD_FLAGS) $^ -o $(TEST_SELECTOR_BLOCK)
 
 # integración sobre el socket real (levanta el server y habla SOCKS5)
 PORT?=11080

@@ -1,4 +1,6 @@
 #include <stdlib.h>
+#include <signal.h>
+#include <pthread.h>
 #include <check.h>
 
 #define INITIAL_SIZE ((size_t) 1024)
@@ -151,7 +153,87 @@ START_TEST (test_selector_register_unregister_register) {
 }
 END_TEST
 
-Suite * 
+// ---------------------------------------------------------------------------
+// f12: handle_block_notifications debe tolerar un handler con handle_block=NULL
+// (p.ej. el handler de origin_fd) sin crashear, y debe invocar el callback
+// cuando handle_block != NULL. Se ejercita el path estatico directamente
+// (selector.c esta #incluido), encolando un job con selector_notify_block.
+// ---------------------------------------------------------------------------
+static unsigned block_count = 0;
+static void
+block_callback(struct selector_key *key) {
+    ck_assert_ptr_nonnull(key->s);
+    ck_assert_int_ge(key->fd, 0);
+    ck_assert_ptr_eq(data_mark, key->data);
+    block_count++;
+}
+
+START_TEST (test_handle_block_null_handler_no_crash) {
+    // selector_notify_block hace pthread_kill(selector_thread, conf.signal);
+    // inicializamos un signal real y apuntamos el "selector_thread" a este hilo
+    // para que la notificacion sea inocua en el contexto del test.
+    const struct selector_init c = {
+        .signal = SIGUSR1,
+        .select_timeout = { .tv_sec = 0, .tv_nsec = 0 },
+    };
+    ck_assert_int_eq(0, selector_init(&c));
+
+    fd_selector s = selector_new(INITIAL_SIZE);
+    ck_assert_ptr_nonnull(s);
+    s->selector_thread = pthread_self();
+
+    // handler SIN handle_block (como socks5_origin_handler).
+    const struct fd_handler h_null = {
+        .handle_read   = NULL,
+        .handle_write  = NULL,
+        .handle_block  = NULL,
+        .handle_close  = NULL,
+    };
+    const int fd = 7;
+    ck_assert_uint_eq(SELECTOR_SUCCESS,
+                      selector_register(s, fd, &h_null, OP_NOOP, data_mark));
+
+    // encolar el block y procesarlo: NO debe desreferenciar el NULL.
+    ck_assert_uint_eq(SELECTOR_SUCCESS, selector_notify_block(s, fd));
+    handle_block_notifications(s);   // si no hay guarda de NULL, segfault aqui
+
+    selector_destroy(s);
+    selector_close();
+}
+END_TEST
+
+START_TEST (test_handle_block_invokes_callback) {
+    const struct selector_init c = {
+        .signal = SIGUSR1,
+        .select_timeout = { .tv_sec = 0, .tv_nsec = 0 },
+    };
+    ck_assert_int_eq(0, selector_init(&c));
+
+    fd_selector s = selector_new(INITIAL_SIZE);
+    ck_assert_ptr_nonnull(s);
+    s->selector_thread = pthread_self();
+
+    block_count = 0;
+    const struct fd_handler h_block = {
+        .handle_read   = NULL,
+        .handle_write  = NULL,
+        .handle_block  = block_callback,
+        .handle_close  = NULL,
+    };
+    const int fd = 9;
+    ck_assert_uint_eq(SELECTOR_SUCCESS,
+                      selector_register(s, fd, &h_block, OP_NOOP, data_mark));
+
+    ck_assert_uint_eq(SELECTOR_SUCCESS, selector_notify_block(s, fd));
+    handle_block_notifications(s);
+    ck_assert_uint_eq(1, block_count);   // el callback se invoco exactamente 1 vez
+
+    selector_destroy(s);
+    selector_close();
+}
+END_TEST
+
+Suite *
 suite(void) {
     Suite *s  = suite_create("nio");
     TCase *tc = tcase_create("nio");
@@ -161,6 +243,8 @@ suite(void) {
     tcase_add_test(tc, test_ensure_capacity);
     tcase_add_test(tc, test_selector_register_fd);
     tcase_add_test(tc, test_selector_register_unregister_register);
+    tcase_add_test(tc, test_handle_block_null_handler_no_crash);
+    tcase_add_test(tc, test_handle_block_invokes_callback);
     suite_add_tcase(s, tc);
 
     return s;

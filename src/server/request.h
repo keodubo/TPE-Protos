@@ -24,11 +24,16 @@
 
 #define REQUEST_REP_SUCCEEDED              0x00
 #define REQUEST_REP_GENERAL_FAILURE        0x01
+#define REQUEST_REP_CONNECTION_NOT_ALLOWED  0x02
 #define REQUEST_REP_NETWORK_UNREACHABLE     0x03
 #define REQUEST_REP_HOST_UNREACHABLE        0x04
 #define REQUEST_REP_CONNECTION_REFUSED      0x05
 #define REQUEST_REP_COMMAND_NOT_SUPPORTED  0x07
 #define REQUEST_REP_ATYP_NOT_SUPPORTED     0x08
+
+/* Tamanos de la reply SOCKS5: 4 (VER REP RSV ATYP) + addr + 2 (port). */
+#define REQUEST_REPLY_IPV4_LEN             10  /* 4 + 4 (IPv4) + 2 */
+#define REQUEST_REPLY_IPV6_LEN             22  /* 4 + 16 (IPv6) + 2 */
 
 enum request_state {
     request_version,                    /* espera VER (debe ser 0x05) */
@@ -43,7 +48,7 @@ enum request_state {
     request_error_invalid_version,      /* VER != 0x05 */
     request_error_invalid_reserved,     /* RSV != 0x00 */
     request_error_unsupported_command,  /* CMD != CONNECT */
-    request_error_unsupported_atyp,     /* ATYP != IPv4 */
+    request_error_unsupported_atyp,     /* ATYP no es IPv4/FQDN/IPv6 */
 };
 
 struct request {
@@ -78,9 +83,6 @@ bool request_is_done(enum request_state state, bool *errored);
 
 /** mapea el estado final a REP SOCKS5 */
 uint8_t request_state_rep(enum request_state state);
-
-/** serializa reply IPv4. Devuelve 10, o -1 sin espacio. */
-int request_marshall(buffer *b, uint8_t rep, const struct sockaddr_in *bound_addr);
 
 /** serializa reply IPv4/IPv6 segun bound_addr. Devuelve bytes escritos, o -1. */
 int request_marshall_addr(buffer *b, uint8_t rep, const struct sockaddr *bound_addr);

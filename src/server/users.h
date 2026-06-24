@@ -11,8 +11,11 @@
  */
 #include <stdbool.h>
 #include <stddef.h>
+#include "args.h"      /* MAX_USERS: capacidad del array de usuarios de CLI */
 
-#define USERS_MAX 10   /* igual que MAX_USERS en args.h */
+/* Mismo origen que el array `users[MAX_USERS]` que puebla main() desde args,
+ * por código en vez de por comentario: si cambia MAX_USERS, cambia USERS_MAX. */
+#define USERS_MAX MAX_USERS
 
 /** vacía la tabla (para reinicio/tests) */
 void users_reset(void);

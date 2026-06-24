@@ -109,7 +109,7 @@ struct item {
 };
 
 /* tarea bloqueante */
-struct blocking_job {
+struct selector_block_job {
     /** selector dueño de la resolucion */
     fd_selector  s;
     /** file descriptor dueño de la resolucion */
@@ -117,9 +117,13 @@ struct blocking_job {
 
     /** datos del trabajo provisto por el usuario */
     void *data;
+    /** si data debe coincidir con item->data antes de despachar */
+    bool has_data;
+    /** cleanup opcional ejecutado en el hilo del selector */
+    selector_block_cleanup cleanup;
 
     /** el siguiente en la lista */
-    struct blocking_job *next;
+    struct selector_block_job *next;
 };
 
 /** marca para usar en item->fd para saber que no está en uso */
@@ -156,7 +160,7 @@ struct fdselector {
      * lista de trabajos blockeantes que finalizaron y que pueden ser
      * notificados.
      */
-    struct blocking_job    *resolution_jobs;
+    struct selector_block_job *resolution_jobs;
 };
 
 /** cantidad máxima de file descriptors que la plataforma puede manejar */
@@ -315,10 +319,18 @@ selector_destroy(fd_selector s) {
                 }
             }
             pthread_mutex_destroy(&s->resolution_mutex);
-            struct blocking_job* j = s->resolution_jobs;
+            struct selector_block_job* j = s->resolution_jobs;
             while (j != NULL) {
-                struct blocking_job* aux = j;
+                struct selector_block_job* aux = j;
                 j = j->next;
+                if (aux->cleanup != NULL) {
+                    struct selector_key key = {
+                        .s    = s,
+                        .fd   = aux->fd,
+                        .data = aux->data,
+                    };
+                    aux->cleanup(&key);
+                }
                 free(aux);
             }
             free(s->fds);
@@ -491,24 +503,39 @@ handle_block_notifications(fd_selector s) {
         .s = s,
     };
     pthread_mutex_lock(&s->resolution_mutex);
-    struct blocking_job* j = s->resolution_jobs;
+    struct selector_block_job* j = s->resolution_jobs;
     while (j != NULL) {
 
         if (!selector_fd_in_bounds(s, j->fd)) {
-            struct blocking_job* aux = j;
+            struct selector_block_job* aux = j;
             j = j->next;
+            if (aux->cleanup != NULL) {
+                key.fd = aux->fd;
+                key.data = aux->data;
+                aux->cleanup(&key);
+            }
             free(aux);
             continue;
         }
 
         struct item* item = s->fds + j->fd;
-        if (ITEM_USED(item)) {
+        // Fix (D6): guarda de NULL coherente con handle_read/handle_write.
+        // Un handler puede no definir handle_block (p.ej. el handler de
+        // origin_fd); sin esta guarda se produciria un null-deref si alguna
+        // vez se notifica un block sobre un fd cuyo handler no lo implementa.
+        const bool data_matches = !j->has_data || item->data == j->data;
+        if (ITEM_USED(item) && data_matches && item->handler->handle_block != NULL) {
             key.fd = item->fd;
             key.data = item->data;
             item->handler->handle_block(&key);
         }
+        if (j->cleanup != NULL) {
+            key.fd = j->fd;
+            key.data = j->data;
+            j->cleanup(&key);
+        }
 
-        struct blocking_job* aux = j;
+        struct selector_block_job* aux = j;
         j = j->next;
         free(aux);
     }
@@ -516,25 +543,35 @@ handle_block_notifications(fd_selector s) {
     pthread_mutex_unlock(&s->resolution_mutex);
 }
 
+selector_block_job *
+selector_block_job_new(void) {
+    return malloc(sizeof(selector_block_job));
+}
+
+void
+selector_block_job_free(selector_block_job *job) {
+    free(job);
+}
 
 selector_status
-selector_notify_block(fd_selector  s,
-                 const int    fd) {
+selector_notify_block_reserved(fd_selector  s,
+                               const int    fd,
+                               void        *data,
+                               selector_block_cleanup cleanup,
+                               selector_block_job *job) {
     selector_status ret = SELECTOR_SUCCESS;
 
-    if(!selector_fd_in_bounds(s, fd)) {
+    if(!selector_fd_in_bounds(s, fd) || job == NULL) {
         ret = SELECTOR_IARGS;
         goto finally;
     }
 
-    // TODO(juan): usar un pool
-    struct blocking_job *job = malloc(sizeof(*job));
-    if(job == NULL) {
-        ret = SELECTOR_ENOMEM;
-        goto finally;
-    }
     job->s  = s;
     job->fd = fd;
+    job->data = data;
+    job->has_data = data != NULL;
+    job->cleanup = cleanup;
+    job->next = NULL;
 
     // encolamos en el selector los resultados
     pthread_mutex_lock(&s->resolution_mutex);
@@ -547,6 +584,28 @@ selector_notify_block(fd_selector  s,
 
 finally:
     return ret;
+}
+
+selector_status
+selector_notify_block_with_data(fd_selector  s,
+                                const int    fd,
+                                void        *data,
+                                selector_block_cleanup cleanup) {
+    selector_block_job *job = selector_block_job_new();
+    if (job == NULL) {
+        return SELECTOR_ENOMEM;
+    }
+    selector_status ret = selector_notify_block_reserved(s, fd, data, cleanup, job);
+    if (ret != SELECTOR_SUCCESS) {
+        selector_block_job_free(job);
+    }
+    return ret;
+}
+
+selector_status
+selector_notify_block(fd_selector  s,
+                 const int    fd) {
+    return selector_notify_block_with_data(s, fd, NULL, NULL);
 }
 
 selector_status

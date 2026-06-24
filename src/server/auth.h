@@ -15,7 +15,14 @@
 #define AUTH_VERSION      0x01
 #define AUTH_STATUS_OK    0x00
 #define AUTH_STATUS_FAIL  0x01
-#define AUTH_MAX_FIELD    255          /* ULEN/PLEN caben en 1 byte (0..255) */
+
+/*
+ * Límite de campo de RFC1929: ULEN/PLEN viajan en 1 byte, así que UNAME/PASSWD
+ * (y los nombres/contraseñas de la tabla de usuarios) miden a lo sumo 255 bytes.
+ * Fuente única del número de protocolo; users.c lo reusa vía este header.
+ */
+#define RFC1929_FIELD_MAX 255
+#define AUTH_MAX_FIELD    RFC1929_FIELD_MAX   /* alias histórico (ver RFC1929_FIELD_MAX) */
 
 enum auth_state {
     auth_version,     /* espera VER (debe ser 0x01) */

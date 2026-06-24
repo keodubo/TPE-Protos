@@ -2,6 +2,7 @@
 #define SOCKS5NIO_H_TPE_SOCKS5
 
 #include "selector.h"
+#include "request.h"   /* REQUEST_REPLY_IPV4_LEN / REQUEST_REPLY_IPV6_LEN */
 
 /**
  * Tamaño de los buffers de I/O por conexión.
@@ -13,10 +14,16 @@
 #define IO_BUFFER_SIZE 8192
 #endif
 
-/* piso de cordura: la respuesta del REQUEST (IPv4) necesita 10 bytes libres;
- * con menos, request_marshall() falla y el server cerraría sin responder. */
-#if IO_BUFFER_SIZE < 10
-#error "IO_BUFFER_SIZE debe ser >= 10"
+/*
+ * Piso de cordura para el buffer de escritura: request_marshall_addr() necesita
+ * REQUEST_REPLY_IPV4_LEN (10) bytes libres para la reply IPv4 y
+ * REQUEST_REPLY_IPV6_LEN (22) para la IPv6 (peor caso). Con menos espacio el
+ * marshall falla y el server cerraría sin responder al REQUEST. El default 8192
+ * nunca lo alcanza; este #error es sólo una red de seguridad para overrides
+ * agresivos de IO_BUFFER_SIZE.
+ */
+#if IO_BUFFER_SIZE < REQUEST_REPLY_IPV6_LEN
+#error "IO_BUFFER_SIZE debe ser >= REQUEST_REPLY_IPV6_LEN (22)"
 #endif
 
 /** handler del socket pasivo SOCKS: acepta la conexión y arranca la stm */

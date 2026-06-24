@@ -26,6 +26,7 @@ import time
 proxy_port = int(sys.argv[1])
 checks = 0
 failures = 0
+skips = 0
 
 HELLO = b"\x05\x01\x02"
 AUTH = b"\x01\x04user\x04pass"
@@ -42,6 +43,13 @@ def check(cond, msg, got=None, want=None):
         if got is not None or want is not None:
             detail = f" (got [{got}] want [{want}])"
         print(f"  FAIL- {msg}{detail}")
+
+
+def skip(msg):
+    # skip explícito: NO cuenta como ok ni como falla.
+    global skips
+    skips += 1
+    print(f"  SKIP- {msg}")
 
 
 def recv_exact(sock, n):
@@ -183,25 +191,64 @@ try:
 finally:
     origin.close()
 
-if len(families) >= 2:
+# ---------------------------------------------------------------------------
+# Caso B: retry multi-IP DETERMINISTICO.
+# Resolvemos localhost (debe dar >=2 familias). Levantamos el origin SOLO en la
+# familia que getaddrinfo devuelve SEGUNDA y dejamos la PRIMERA direccion sin
+# nadie escuchando (connect a ella -> ECONNREFUSED, comprobado en vivo). Asi el
+# proxy DEBE: intentar la 1ra direccion, fallar el connect, y reintentar la 2da
+# (request_connect_next). Que el body de la 2da llegue prueba el retry real.
+def first_addr_refuses(host, port, family):
+    # devuelve True si un connect directo a la PRIMERA direccion es rechazado.
+    infos = socket.getaddrinfo(host, port, family, socket.SOCK_STREAM)
+    if not infos:
+        return False
+    af, socktype, proto, _, sa = infos[0]
+    probe = socket.socket(af, socktype, proto)
+    probe.settimeout(1.0)
+    try:
+        probe.connect(sa)
+        probe.close()
+        return False  # alguien escucha: NO sirve para forzar retry
+    except ConnectionRefusedError:
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            probe.close()
+        except OSError:
+            pass
+
+
+if len(families) < 2:
+    skip("B: retry multi-IP no aplicable: localhost no expone dos familias")
+else:
+    first_family = families[0]
     retry_family = families[1]
     origin = Origin(retry_family, b"multi-ip-ok")
     try:
+        # reconfirmar el orden con el puerto real del origin y que la PRIMERA
+        # direccion (sin listener) rechace el connect.
         actual = distinct_localhost_families(origin.port)
-        forced_retry = actual and actual[0] != retry_family and retry_family in actual[1:]
-        hello, auth, reply, body = socks_exchange(request_fqdn("localhost", origin.port), "localhost")
-        check(len(reply) in (10, 22) and reply[1] == 0x00,
-              "B: FQDN localhost con familia inicial cerrada -> REP success",
-              reply.hex(), "05 00 ...")
-        check(b"multi-ip-ok" in body,
-              "B: retry multi-IP llega a la direccion posterior")
-        check(forced_retry,
-              "B: entorno ordeno localhost para forzar retry",
-              repr([f.name for f in actual]), "primera familia distinta del origin")
+        ordered = actual == families or (actual and actual[0] == first_family)
+        refused = first_addr_refuses("localhost", origin.port, socket.AF_UNSPEC)
+        if not (ordered and refused):
+            skip("B: el entorno no garantiza 1ra direccion cerrada + 2da abierta "
+                 f"(orden={[f.name for f in actual]} refused={refused})")
+        else:
+            hello, auth, reply, body = socks_exchange(
+                request_fqdn("localhost", origin.port), "localhost")
+            check(len(reply) in (10, 22) and reply[1] == 0x00,
+                  "B: FQDN con 1ra direccion cerrada -> REP success (tras retry)",
+                  reply.hex(), "05 00 ...")
+            check(b"multi-ip-ok" in body,
+                  "B: retry multi-IP alcanza la 2da direccion y relayea su body",
+                  body[-32:], b"...multi-ip-ok")
+            check(origin.accepted.is_set(),
+                  "B: el origin de la 2da direccion efectivamente acepto la conexion")
     finally:
         origin.close()
-else:
-    check(True, "B: retry multi-IP no aplicable: localhost no expone dos familias")
 
 try:
     origin = Origin(socket.AF_INET6, b"ipv6-ok")
@@ -218,6 +265,75 @@ else:
     finally:
         origin.close()
 
-print(f"== RESULTADO M5: {checks - failures} ok, {failures} fallas ==")
+print(f"== RESULTADO M5: {checks - failures} ok, {failures} fallas, {skips} skips ==")
 sys.exit(0 if failures == 0 else 1)
 PY
+PY_RC=$?
+
+# ---------------------------------------------------------------------------
+# Caso D (f6): bind del socket pasivo según -l.
+#   D1) -l ::1  -> el server debe escuchar SOLO en IPv6 loopback, no en 0.0.0.0.
+#   D2) -l noEsUnaIP -> literal inválido: el server DEBE fallar (exit != 0) con
+#       diagnóstico en stderr, en vez de caer mudo a INADDR_ANY (0.0.0.0).
+# Estos casos levantan instancias EFÍMERAS del server, aparte del proxy del
+# trap de arriba.
+# ---------------------------------------------------------------------------
+f6_fail=0
+f6_check() {
+    # $1: cond (0=ok), $2: msg
+    if [ "$1" -eq 0 ]; then
+        echo "  ok  - $2"
+    else
+        echo "  FAIL- $2"
+        f6_fail=1
+    fi
+}
+
+# D1: -l ::1 escucha en IPv6 loopback (y NO en 0.0.0.0 IPv4).
+D1_PORT=$((PORT + 1))
+./bin/server -l ::1 -p "$D1_PORT" -u user:pass >/tmp/m5_l_ipv6.log 2>&1 &
+D1=$!
+sleep 0.4
+if kill -0 "$D1" 2>/dev/null; then
+    # conexión por ::1 debe funcionar
+    python3 -c "import socket,sys
+try:
+    socket.create_connection(('::1', $D1_PORT), timeout=1).close()
+    sys.exit(0)
+except OSError:
+    sys.exit(1)" && f6_check 0 "D1: -l ::1 acepta conexiones en IPv6 loopback" \
+        || f6_check 1 "D1: -l ::1 acepta conexiones en IPv6 loopback"
+    # conexión por 127.0.0.1 (IPv4) NO debe funcionar (bind solo-IPv6)
+    if python3 -c "import socket,sys
+try:
+    socket.create_connection(('127.0.0.1', $D1_PORT), timeout=1).close()
+    sys.exit(0)
+except OSError:
+    sys.exit(1)"; then
+        f6_check 1 "D1: -l ::1 NO escucha en 0.0.0.0 IPv4 (no debería aceptar 127.0.0.1)"
+    else
+        f6_check 0 "D1: -l ::1 NO escucha en 0.0.0.0 IPv4"
+    fi
+else
+    f6_check 1 "D1: -l ::1 el server arrancó (no debería abortar con IPv6 loopback)"
+fi
+kill -TERM "$D1" 2>/dev/null; wait "$D1" 2>/dev/null
+
+# D2: -l noEsUnaIP debe fallar con exit != 0 y diagnóstico en stderr.
+./bin/server -l noEsUnaIP -p $((PORT + 2)) -u user:pass >/tmp/m5_l_bad.log 2>&1
+D2_RC=$?
+if [ "$D2_RC" -ne 0 ]; then
+    f6_check 0 "D2: -l con literal inválido falla con exit != 0 (no cae mudo a 0.0.0.0)"
+else
+    f6_check 1 "D2: -l con literal inválido falla con exit != 0"
+fi
+if grep -qi "direcci\|-l\|literal\|IPv4\|IPv6" /tmp/m5_l_bad.log; then
+    f6_check 0 "D2: -l inválido emite diagnóstico en stderr"
+else
+    f6_check 1 "D2: -l inválido emite diagnóstico en stderr"
+fi
+
+if [ "$PY_RC" -ne 0 ] || [ "$f6_fail" -ne 0 ]; then
+    exit 1
+fi
+exit 0

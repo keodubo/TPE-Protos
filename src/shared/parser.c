@@ -82,7 +82,10 @@ parser_feed(struct parser *p, const uint8_t c) {
 }
 
 
-static const unsigned classes[0xFF] = {0x00};
+/* fix: 0x100 (256) entradas para cubrir todo el rango de un uint8_t (0..255);
+ * antes era [0xFF]=255 y parser_feed indexa por un byte, leyendo classes[255]
+ * fuera del arreglo para el valor 0xFF (OOB read). */
+static const unsigned classes[0x100] = {0x00};
 
 const unsigned *
 parser_no_classes(void) {

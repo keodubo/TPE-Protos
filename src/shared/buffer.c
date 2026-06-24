@@ -46,16 +46,23 @@ buffer_read_ptr(buffer *b, size_t *nbyte) {
     return b->read;
 }
 
+/* Contrato: 'bytes' debe ser el resultado de un recv/send ya validado como > 0
+ * (toda la base lo verifica antes de llamar). El guard 'bytes > -1' descarta
+ * valores negativos de forma defensiva (toolkit de la catedra); el assert en
+ * debug detecta un eventual mal uso (pasar un valor negativo). */
 inline void
 buffer_write_adv(buffer *b, const ssize_t bytes) {
+    assert(bytes >= 0);
     if(bytes > -1) {
         b->write += (size_t) bytes;
         assert(b->write <= b->limit);
     }
 }
 
+/* Contrato: ver buffer_write_adv. 'bytes' debe ser un recv ya validado > 0. */
 inline void
 buffer_read_adv(buffer *b, const ssize_t bytes) {
+    assert(bytes >= 0);
     if(bytes > -1) {
         b->read += (size_t) bytes;
         assert(b->read <= b->write);

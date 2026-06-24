@@ -3,13 +3,12 @@
  * Fuente de verdad única para la validación RFC1929 (D7.2).
  */
 #include "users.h"
+#include "auth.h"      /* RFC1929_FIELD_MAX: límite de campo RFC1929 (fuente única) */
 #include <string.h>
 
-#define USERS_FIELD_MAX 255   /* límite de RFC1929 (ULEN/PLEN en 1 byte) */
-
 struct user_entry {
-    char name[USERS_FIELD_MAX + 1];
-    char pass[USERS_FIELD_MAX + 1];
+    char name[RFC1929_FIELD_MAX + 1];
+    char pass[RFC1929_FIELD_MAX + 1];
     size_t name_len;
     size_t pass_len;
     bool used;
@@ -30,7 +29,7 @@ valid_field_len(const char *s, const size_t n) {
     if (s == NULL) {
         return false;
     }
-    return n > 0 && n <= USERS_FIELD_MAX;
+    return n > 0 && n <= RFC1929_FIELD_MAX;
 }
 
 static bool

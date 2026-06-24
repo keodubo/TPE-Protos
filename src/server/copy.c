@@ -3,13 +3,7 @@
 #include <sys/socket.h>
 
 #include "copy.h"
-#include "socks5.h"
-
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
-
-#define ATTACHMENT(key) ((struct socks5 *)(key)->data)
+#include "socks5.h"   /* ATTACHMENT y el fallback de MSG_NOSIGNAL viven acá (f26) */
 
 static struct copy *
 copy_for_key(struct selector_key *key) {
@@ -23,11 +17,12 @@ copy_for_key(struct selector_key *key) {
     return NULL;
 }
 
+/* key.fd se refresca por evento (puede cambiar al reusar fds). key.data (el
+ * struct socks5) es invariante por conexión y se fija una sola vez en copy_init. */
 static void
 copy_set_key(struct copy *c, struct selector_key *key) {
-    c->key.s    = key->s;
-    c->key.fd   = c->fd == NULL ? -1 : *c->fd;
-    c->key.data = key->data;
+    c->key.s  = key->s;
+    c->key.fd = c->fd == NULL ? -1 : *c->fd;
 }
 
 static void
@@ -90,18 +85,20 @@ copy_init(const unsigned state, struct selector_key *key) {
     buffer_compact(&s->read_buffer);
     buffer_compact(&s->write_buffer);
 
-    s->copy_client.fd      = &s->client_fd;
-    s->copy_client.rb      = &s->read_buffer;
-    s->copy_client.wb      = &s->write_buffer;
-    s->copy_client.duplex  = OP_READ | OP_WRITE;
-    s->copy_client.other   = &s->copy_origin;
+    s->copy_client.fd        = &s->client_fd;
+    s->copy_client.rb        = &s->read_buffer;
+    s->copy_client.wb        = &s->write_buffer;
+    s->copy_client.duplex    = OP_READ | OP_WRITE;
+    s->copy_client.other     = &s->copy_origin;
+    s->copy_client.key.data  = key->data;   /* invariante por conexión */
     copy_set_key(&s->copy_client, key);
 
-    s->copy_origin.fd      = &s->origin_fd;
-    s->copy_origin.rb      = &s->write_buffer;
-    s->copy_origin.wb      = &s->read_buffer;
-    s->copy_origin.duplex  = OP_READ | OP_WRITE;
-    s->copy_origin.other   = &s->copy_client;
+    s->copy_origin.fd        = &s->origin_fd;
+    s->copy_origin.rb        = &s->write_buffer;
+    s->copy_origin.wb        = &s->read_buffer;
+    s->copy_origin.duplex    = OP_READ | OP_WRITE;
+    s->copy_origin.other     = &s->copy_client;
+    s->copy_origin.key.data  = key->data;   /* invariante por conexión */
     copy_set_key(&s->copy_origin, key);
 
     (void) copy_compute_pair(&s->copy_client);

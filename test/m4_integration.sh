@@ -175,6 +175,77 @@ try:
 finally:
     origin.close()
 
+# --- Caso C: backpressure observable ---------------------------------------
+# El cliente manda un payload >> (buffers del proxy + buffers de socket) hacia
+# un origin que NO lee durante un rato. El proxy NO puede bloquear: debe apagar
+# OP_READ del cliente cuando su buffer de salida hacia el origin se llena, y
+# rehabilitarlo cuando el origin drena. Verificamos que, pese al stall inicial,
+# el payload completo llega y el proxy sigue vivo (acepta otra conexión).
+class SlowOrigin:
+    def __init__(self, total, stall=0.6):
+        self.total = total
+        self.stall = stall
+        self.received = 0
+        self.done = threading.Event()
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(1)
+        self.port = self.sock.getsockname()[1]
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        try:
+            conn, _ = self.sock.accept()
+            conn.settimeout(5)
+            try:
+                time.sleep(self.stall)  # no leer -> fuerza backpressure
+                while self.received < self.total:
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        break
+                    self.received += len(chunk)
+            finally:
+                conn.close()
+        except OSError:
+            pass
+        finally:
+            self.done.set()
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        self.thread.join(timeout=2)
+
+
+big = bytes((i % 251 for i in range(300000)))  # >> IO_BUFFER_SIZE default 8192
+origin = SlowOrigin(len(big))
+try:
+    client = socket.create_connection(("127.0.0.1", proxy_port), timeout=3)
+    client.settimeout(8)
+    client.sendall(HELLO)
+    check(recv_exact(client, 2) == b"\x05\x02", "C: HELLO -> USERPASS")
+    client.sendall(AUTH)
+    check(recv_exact(client, 2) == b"\x01\x00", "C: AUTH correcto -> OK")
+    client.sendall(make_request(origin.port))
+    reply = recv_exact(client, 10)
+    check(len(reply) == 10 and reply[:4] == b"\x05\x00\x00\x01",
+          "C: CONNECT -> REP success", reply.hex(), "05000001 + 6 bytes")
+    client.sendall(big)  # bloquearía si el proxy no aplicara backpressure NO-bloqueante
+    client.shutdown(socket.SHUT_WR)
+    origin.done.wait(timeout=8)
+    client.close()
+    check(origin.received == len(big),
+          "C: payload grande con peer lento llega completo (backpressure)",
+          origin.received, len(big))
+    ready_again, err2 = wait_for_proxy()
+    check(ready_again, "C: el proxy sigue vivo tras backpressure", repr(err2), "ready")
+finally:
+    origin.close()
+
 print(f"== RESULTADO M4: {checks - failures} ok, {failures} fallas ==")
 sys.exit(0 if failures == 0 else 1)
 PY

@@ -1,6 +1,7 @@
 #ifndef SOCKS5_H_TPE_SOCKS5
 #define SOCKS5_H_TPE_SOCKS5
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <netdb.h>
@@ -13,6 +14,23 @@
 #include "request.h"
 #include "socks5nio.h"
 #include "stm.h"
+
+/*
+ * Helpers compartidos por las TU que tocan una conexión SOCKS5
+ * (socks5nio.c, copy.c). Centralizados acá para evitar divergencia (f26).
+ */
+
+/** recupera el struct socks5 colgado del selector_key */
+#define ATTACHMENT(key) ((struct socks5 *)(key)->data)
+
+/*
+ * macOS no define MSG_NOSIGNAL; el fallback a 0 lo hace portable. La defensa
+ * real anti-SIGPIPE es signal(SIGPIPE, SIG_IGN) global (main.c). Definido acá
+ * para que todos los send() del proyecto usen el mismo flag de forma uniforme.
+ */
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 
 enum socks_v5state {
     HELLO_READ  = 0,
@@ -49,6 +67,11 @@ struct request_st {
     bool                   initialized;
 };
 
+/*
+ * f42: connecting_st guarda un único uint8_t (el REP del intento de connect en
+ * curso). Se mantiene como struct para dejar lugar a más estado por-intento
+ * (timeouts, contador de IPs probadas) sin tocar la firma de struct socks5.
+ */
 struct connecting_st {
     uint8_t                rep;
 };
@@ -56,8 +79,18 @@ struct connecting_st {
 struct resolv_st {
     bool                   started;
     int                    gai_error;
+    int                    sys_errno;
 };
 
+/*
+ * f42: costo por conexión del pool. struct socks5 embebe dos struct copy
+ * completos (copy_client/copy_origin, cada uno con su selector_key) más dos
+ * buffers crudos de IO_BUFFER_SIZE (default 8192) -> ~16 KiB de buffers por
+ * conexión. Con el objetivo de >=500 conexiones esto domina la huella de RAM
+ * (~8 MiB sólo en buffers). El union client (hello/auth/request) reusa una sola
+ * región porque los tres estados nunca coexisten; los dos copy NO se solapan con
+ * el union porque COPY usa ambos buffers en simultáneo.
+ */
 struct socks5 {
     int                     client_fd;
     int                     origin_fd;
@@ -87,7 +120,12 @@ struct socks5 {
     buffer                  read_buffer;
     buffer                  write_buffer;
 
-    unsigned                references;
+    /*
+     * f13: el refcount lo tocan el hilo principal y el hilo DNS (resolv.c).
+     * _Atomic + fetch_add/fetch_sub evita el data race (UB en C11). El reciclaje
+     * al pool sólo lo hace el hilo principal (ver socks5_unref).
+     */
+    _Atomic unsigned        references;
     struct socks5          *next;
 };
 

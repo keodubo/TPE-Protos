@@ -66,7 +66,7 @@ Los binarios quedan en `bin/`.
 ```
 Prueba rapida del servidor SOCKS:
 ```bash
-./bin/server -p 1080 &
+./bin/server -p 1080 -u user:pass &
 # handshake SOCKS5/auth/request con test/*_integration.sh o make check
 kill %1
 ```

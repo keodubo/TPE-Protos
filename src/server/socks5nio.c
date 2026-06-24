@@ -6,8 +6,11 @@
  * Los handlers top-level (socksv5_read/write) delegan en la `stm`; cuando la
  * máquina llega a DONE o ERROR se desregistran y cierran los fds.
  *
- * M3: REQUEST + CONNECT IPv4 literal.
- * M4: relay bidireccional transparente cliente <-> origin.
+ * M3: REQUEST + CONNECT (genérico sobre struct sockaddr).
+ * M4: relay bidireccional transparente cliente <-> origin (half-close real).
+ * M5: resolución DNS no bloqueante (hilo getaddrinfo + selector_notify_block),
+ *     soporte IPv6 y FQDN, y retry multi-IP (request_connect_next) probando las
+ *     direcciones devueltas hasta conectar o agotarlas.
  */
 #include <stdlib.h>   // malloc
 #include <string.h>   // memset
@@ -15,6 +18,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <fcntl.h>    // fcntl, FD_CLOEXEC
+#include <pthread.h>
 #include <unistd.h>   // close
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -36,20 +40,80 @@
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
+// ATTACHMENT y el fallback de MSG_NOSIGNAL viven en socks5.h (compartidos con
+// copy.c) para evitar divergencia entre TU (f26).
 
 ////////////////////////////////////////////////////////////////////////////////
 // Pool de objetos (reusar alocaciones para sostener muchas conexiones)
 static struct socks5  *pool      = NULL;
 static unsigned        pool_size = 0;
 static const unsigned  max_pool  = 50;
+static pthread_mutex_t pool_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /** contador de conexiones (para identificarlas en los logs) */
 static unsigned        conn_counter = 0;
 
-static const struct state_definition *socks5_describe_states(void);
+/*
+ * Prototipos de los handlers de estado (las definiciones están más abajo). Se
+ * declaran acá para poder definir client_statbl ANTES de socks5_new y asignarlo
+ * directo (ret->stm.states = client_statbl), sin la indirección de un wrapper
+ * (f18). No se puede forward-declarar el array como 'static const T arr[];'
+ * porque gcc lo rechaza (array size missing); por eso se adelanta la tabla.
+ */
+static void     hello_read_init     (const unsigned state, struct selector_key *key);
+static unsigned hello_read          (struct selector_key *key);
+static unsigned hello_write         (struct selector_key *key);
+static unsigned auth_read           (struct selector_key *key);
+static unsigned auth_write          (struct selector_key *key);
+static void     request_read_init   (const unsigned state, struct selector_key *key);
+static unsigned request_read        (struct selector_key *key);
+static void     request_resolv_init (const unsigned state, struct selector_key *key);
+static unsigned request_resolv_done (struct selector_key *key);
+static unsigned request_connecting_read(struct selector_key *key);
+static unsigned request_connecting  (struct selector_key *key);
+static unsigned request_write       (struct selector_key *key);
+
+/** tabla de estados (índices correlativos con enum socks_v5state) */
+static const struct state_definition client_statbl[] = {
+    {
+        .state         = HELLO_READ,
+        .on_arrival    = hello_read_init,
+        .on_read_ready = hello_read,
+    }, {
+        .state          = HELLO_WRITE,
+        .on_write_ready = hello_write,
+    }, {
+        .state         = AUTH_READ,
+        .on_read_ready = auth_read,
+    }, {
+        .state          = AUTH_WRITE,
+        .on_write_ready = auth_write,
+    }, {
+        .state         = REQUEST_READ,
+        .on_arrival    = request_read_init,
+        .on_read_ready = request_read,
+    }, {
+        .state          = REQUEST_RESOLV,
+        .on_arrival     = request_resolv_init,
+        .on_block_ready = request_resolv_done,
+    }, {
+        .state          = REQUEST_CONNECTING,
+        .on_read_ready  = request_connecting_read,
+        .on_write_ready = request_connecting,
+    }, {
+        .state          = REQUEST_WRITE,
+        .on_write_ready = request_write,
+    }, {
+        .state          = COPY,
+        .on_arrival     = copy_init,
+        .on_read_ready  = copy_read,
+        .on_write_ready = copy_write,
+    }, {
+        .state = DONE,
+    }, {
+        .state = ERROR,
+    },
+};
 
 /** entrada a la autenticación desde HELLO_WRITE (definida en la sección AUTH) */
 static unsigned hello_to_auth(struct selector_key *key);
@@ -58,6 +122,7 @@ static unsigned auth_to_request(struct selector_key *key);
 static struct socks5 *
 socks5_new(const int client_fd) {
     struct socks5 *ret;
+    pthread_mutex_lock(&pool_mutex);
     if (pool == NULL) {
         ret = malloc(sizeof(*ret));
     } else {
@@ -65,6 +130,7 @@ socks5_new(const int client_fd) {
         pool      = pool->next;
         pool_size--;
     }
+    pthread_mutex_unlock(&pool_mutex);
     if (ret == NULL) {
         return NULL;
     }
@@ -75,7 +141,7 @@ socks5_new(const int client_fd) {
 
     ret->stm.initial   = HELLO_READ;
     ret->stm.max_state = ERROR;
-    ret->stm.states    = socks5_describe_states();
+    ret->stm.states    = client_statbl;
     stm_init(&ret->stm);
 
     buffer_init(&ret->read_buffer,  N(ret->raw_buff_a), ret->raw_buff_a);
@@ -92,10 +158,16 @@ socks5_resolution_clear(struct socks5 *s) {
     }
 }
 
+// f13: references es _Atomic (socks5.h). socks5_ref/unref se invocan desde el
+// hilo principal y desde el hilo DNS (resolv.c), así que el inc/dec va por
+// fetch_add/fetch_sub para evitar el data race (UB en C11). El reciclaje al pool
+// (pool/pool_size) lo hace SIEMPRE el último que decrementa; en operación normal
+// el cliente queda en OP_NOOP durante REQUEST_RESOLV y el hilo DNS nunca es la
+// última referencia, así que el toque al pool global ocurre en el hilo principal.
 void
 socks5_ref(struct socks5 *s) {
     if (s != NULL) {
-        s->references++;
+        atomic_fetch_add(&s->references, 1);
     }
 }
 
@@ -104,22 +176,26 @@ socks5_unref(struct socks5 *s) {
     if (s == NULL) {
         return;
     }
-    if (s->references == 1) {
+    // fetch_sub devuelve el valor previo: si era 1, este fue el último ref.
+    if (atomic_fetch_sub(&s->references, 1) == 1) {
         socks5_resolution_clear(s);
+        pthread_mutex_lock(&pool_mutex);
         if (pool_size < max_pool) {
             s->next    = pool;
             pool       = s;
             pool_size++;
         } else {
+            pthread_mutex_unlock(&pool_mutex);
             free(s);
+            return;
         }
-    } else {
-        s->references--;
+        pthread_mutex_unlock(&pool_mutex);
     }
 }
 
 void
 socksv5_pool_destroy(void) {
+    pthread_mutex_lock(&pool_mutex);
     struct socks5 *next, *s = pool;
     while (s != NULL) {
         next = s->next;
@@ -129,9 +205,8 @@ socksv5_pool_destroy(void) {
     }
     pool      = NULL;
     pool_size = 0;
+    pthread_mutex_unlock(&pool_mutex);
 }
-
-#define ATTACHMENT(key) ((struct socks5 *)(key)->data)
 
 ////////////////////////////////////////////////////////////////////////////////
 // Handlers de selección de una conexión establecida
@@ -175,6 +250,11 @@ socksv5_passive_accept(struct selector_key *key) {
     if (fcntl(client, F_SETFD, FD_CLOEXEC) == -1) {
         goto fail;
     }
+#ifdef SO_NOSIGPIPE
+    // f38 (opcional, macOS/BSD): defensa extra anti-SIGPIPE a nivel socket,
+    // redundante con el SIG_IGN global (main.c) y MSG_NOSIGNAL. No fatal si falla.
+    (void) setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &(int){1}, sizeof(int));
+#endif
     state = socks5_new(client);
     if (state == NULL) {
         goto fail;
@@ -252,6 +332,10 @@ fmt_methods(char *out, size_t outsz, const uint8_t *m, uint8_t n) {
     }
 }
 
+/* tamaño del buffer de log de métodos: hasta N(offered) métodos formateados como
+ * "xx, " (4 chars) más '[', ']' y el NUL final (f35: derivado de offered[]). */
+#define HELLO_METHODS_LOG_SZ (N(((struct hello_st *)0)->offered) * 4 + 3)
+
 static unsigned
 hello_read(struct selector_key *key) {
     struct hello_st *d     = &ATTACHMENT(key)->client.hello;
@@ -264,15 +348,17 @@ hello_read(struct selector_key *key) {
     if (n > 0) {
         buffer_write_adv(d->rb, n);
         const enum hello_state st = hello_consume(d->rb, &d->parser, &error);
-        if (error) {
+        if (error) {   // f19: error resuelto inline, simétrico con auth/request_drive
             DBG("[conn #%u] hello: saludo inválido, cierra",
                 ATTACHMENT(key)->id);
-        } else if (hello_is_done(st, 0)) {
+            return ERROR;
+        }
+        if (hello_is_done(st, 0)) {
             if (selector_set_interest_key(key, OP_WRITE) == SELECTOR_SUCCESS) {
                 ret = hello_process(d);
                 const uint8_t shown = d->noffered < (uint8_t) N(d->offered)
                                     ? d->noffered : (uint8_t) N(d->offered);
-                char ms[8 * 4 + 3];
+                char ms[HELLO_METHODS_LOG_SZ];
                 fmt_methods(ms, sizeof(ms), d->offered, shown);
                 DBG("[conn #%u] hello: ofrece %s -> elige 0x%02x%s",
                     ATTACHMENT(key)->id, ms, d->method,
@@ -287,7 +373,7 @@ hello_read(struct selector_key *key) {
     } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
         ret = ERROR;   // EINTR: señal; mantenemos estado y reintentamos luego
     }
-    return error ? ERROR : ret;
+    return ret;
 }
 
 static unsigned
@@ -297,7 +383,7 @@ hello_write(struct selector_key *key) {
 
     size_t   count;
     uint8_t *ptr = buffer_read_ptr(d->wb, &count);
-    const ssize_t n = send(key->fd, ptr, count, 0);
+    const ssize_t n = send(key->fd, ptr, count, MSG_NOSIGNAL);   // f37: uniforme
     if (n > 0) {
         buffer_read_adv(d->wb, n);
         if (!buffer_can_read(d->wb)) {
@@ -403,7 +489,7 @@ auth_write(struct selector_key *key) {
 
     size_t   count;
     uint8_t *ptr = buffer_read_ptr(d->wb, &count);
-    const ssize_t n = send(key->fd, ptr, count, 0);
+    const ssize_t n = send(key->fd, ptr, count, MSG_NOSIGNAL);   // f37: uniforme
     if (n > 0) {
         buffer_read_adv(d->wb, n);
         if (!buffer_can_read(d->wb)) {
@@ -457,6 +543,7 @@ request_read_init(const unsigned state, struct selector_key *key) {
     buffer_reset(d->wb);
     ATTACHMENT(key)->resolv.started = false;
     ATTACHMENT(key)->resolv.gai_error = 0;
+    ATTACHMENT(key)->resolv.sys_errno = 0;
 }
 
 static int
@@ -582,6 +669,16 @@ request_drive(struct selector_key *key) {
     }
 
     if (error) {
+        // f21: VER inválida en el REQUEST -> cerrar SIN responder, igual que
+        // HELLO. Serializar un frame VER=0x05 a un cliente que justamente NO
+        // habla SOCKS5 es semánticamente inútil (RFC1928 no define REP para
+        // versión inválida). El resto de los errores de protocolo sí responden
+        // con su REP. Decisión documentada en docs/extras/DECISIONS.md.
+        if (st == request_error_invalid_version) {
+            DBG("[conn #%u] request: VER inválida -> cierre sin responder",
+                ATTACHMENT(key)->id);
+            return ERROR;
+        }
         const uint8_t rep = request_state_rep(st);
         DBG("[conn #%u] request: parseo inválido -> REP 0x%02x",
             ATTACHMENT(key)->id, rep);
@@ -609,6 +706,20 @@ request_read(struct selector_key *key) {
     return request_drive(key);
 }
 
+/*
+ * f39: partición de escritura de resolv.gai_error / origin_resolution.
+ *   - Si resolv_dispatch() == 0: el hilo DNS arrancó. SÓLO el hilo escribe
+ *     gai_error (retorno de getaddrinfo, código EAI_*) y origin_resolution;
+ *     main NO los vuelve a tocar. El hilo despierta a main con notify_block.
+ *   - Si resolv_dispatch() == -1: el hilo NO existe (resolv.c retornó antes de
+ *     pthread_create). SÓLO main escribe gai_error (= EAI_FAIL) y notifica.
+ * Así nunca hay dos escritores concurrentes del mismo campo. Códigos en el
+ * espacio EAI_* (usar gai_strerror, no strerror, si se loguea).
+ *
+ * f41: client_set_interest(OP_NOOP) y resolv_dispatch se separan en dos if
+ * explícitos (antes un solo if con ||) para que el orden y el balance de
+ * refs/notify sean obvios: el hilo se lanza SÓLO con el cliente ya en OP_NOOP.
+ */
 static void
 request_resolv_init(const unsigned state, struct selector_key *key) {
     (void) state;
@@ -619,10 +730,17 @@ request_resolv_init(const unsigned state, struct selector_key *key) {
         return;
     }
     s->resolv.started = true;
-    if (client_set_interest(key, OP_NOOP) != SELECTOR_SUCCESS
-            || resolv_dispatch(key, d->parser.request.dst_fqdn,
-                               d->parser.request.dst_port) == -1) {
-        s->resolv.gai_error = EAI_FAIL;
+
+    // 1) parkear al cliente: durante REQUEST_RESOLV no leemos/escribimos su fd.
+    if (client_set_interest(key, OP_NOOP) != SELECTOR_SUCCESS) {
+        s->resolv.gai_error = EAI_FAIL;             // sólo main escribe (hilo no existe)
+        (void) selector_notify_block(key->s, s->client_fd);
+        return;
+    }
+    // 2) lanzar el hilo DNS. Si falla, el hilo no arrancó: main marca el error.
+    if (resolv_dispatch(key, d->parser.request.dst_fqdn,
+                        d->parser.request.dst_port) == -1) {
+        s->resolv.gai_error = EAI_FAIL;             // sólo main escribe (hilo no existe)
         (void) selector_notify_block(key->s, s->client_fd);
     }
 }
@@ -631,10 +749,29 @@ static unsigned
 request_resolv_done(struct selector_key *key) {
     struct socks5 *s = ATTACHMENT(key);
 
+    /*
+     * f15: blindaje de la ventana de reuso de fd. selector_notify_block()
+     * despacha el block por NÚMERO de fd, no por objeto: si el cliente se
+     * desconectara durante getaddrinfo y su fd se reasignara a otra conexión
+     * antes de procesar el job, este callback podría dispararse sobre un objeto
+     * que NO está resolviendo. Sólo actuamos si esta conexión realmente lanzó
+     * una resolución (resolv.started); en caso contrario ignoramos el block y
+     * dejamos a la STM en su estado actual (ver resolv.c para la suposición).
+     */
+    if (!s->resolv.started) {
+        DBG("[conn #%u] request: block de DNS espurio (fd reusado), ignorado",
+            s->id);
+        return stm_state(&s->stm);   // sin transición: dejamos la STM como está
+    }
+
     if (s->resolv.gai_error != 0 || s->origin_resolution == NULL) {
+        const uint8_t rep = s->resolv.gai_error == 0
+                          ? REQUEST_REP_GENERAL_FAILURE
+                          : request_resolve_error_rep(s->resolv.gai_error,
+                                                      s->resolv.sys_errno);
         DBG("[conn #%u] request: resolucion falla gai=%d",
             s->id, s->resolv.gai_error);
-        return request_reply(key, REQUEST_REP_HOST_UNREACHABLE, NULL);
+        return request_reply(key, rep, NULL);
     }
     s->current_resolution = s->origin_resolution;
     s->connecting.rep = REQUEST_REP_HOST_UNREACHABLE;
@@ -642,6 +779,14 @@ request_resolv_done(struct selector_key *key) {
     return request_connect_next(key);
 }
 
+/*
+ * Parquea datos que el cliente envía ANTES de que el connect al origin termine
+ * (no se pierden: se acumulan en read_buffer). Si read_buffer se llena, ponemos
+ * al cliente en OP_NOOP: es backpressure INTENCIONAL, no un deadlock. El interés
+ * se RE-ENGANCHA al entrar a COPY: copy_init -> copy_compute_pair recalcula el
+ * interés de ambos sentidos tras el buffer_compact, así que los bytes parkeados
+ * se drenan hacia el origin apenas arranca el relay.
+ */
 static unsigned
 request_connecting_read(struct selector_key *key) {
     struct request_st *d = &ATTACHMENT(key)->client.request;
@@ -649,6 +794,7 @@ request_connecting_read(struct selector_key *key) {
     size_t   count;
     uint8_t *ptr = buffer_write_ptr(d->rb, &count);
     if (count == 0) {
+        // buffer lleno antes de conectar: backpressure (ver doc arriba).
         return client_set_interest(key, OP_NOOP) == SELECTOR_SUCCESS
              ? REQUEST_CONNECTING : ERROR;
     }
@@ -657,6 +803,7 @@ request_connecting_read(struct selector_key *key) {
     if (n > 0) {
         buffer_write_adv(d->rb, n);
         if (!buffer_can_write(d->rb)) {
+            // se llenó al leer: backpressure hasta COPY (ver doc arriba).
             if (client_set_interest(key, OP_NOOP) != SELECTOR_SUCCESS) {
                 return ERROR;
             }
@@ -688,8 +835,22 @@ request_connecting(struct selector_key *key) {
         memset(&bound, 0, sizeof(bound));
         if (getsockname(key->fd, (struct sockaddr *) &bound, &bound_len) == -1
                 || (bound.ss_family != AF_INET && bound.ss_family != AF_INET6)) {
+            // f16: getsockname casi nunca falla sobre un socket conectado; si
+            // pasa, usamos la dirección destino como BND.ADDR (RFC1928 espera la
+            // dirección del socket, pero el destino es mejor aproximación que
+            // 0.0.0.0:0). Último recurso documentado: 0.0.0.0:0.
+            DBG("[conn #%u] request: getsockname falló (errno=%d), "
+                "uso addr destino como BND", s->id, errno);
             memset(&bound, 0, sizeof(bound));
-            bound.ss_family = AF_INET;
+            // El addr destino de este intento está parkeado en el socket;
+            // getpeername lo refleja. Si tampoco anda, último recurso 0.0.0.0:0.
+            socklen_t peer_len = sizeof(bound);
+            if (getpeername(key->fd, (struct sockaddr *) &bound, &peer_len) == -1
+                    || (bound.ss_family != AF_INET
+                        && bound.ss_family != AF_INET6)) {
+                memset(&bound, 0, sizeof(bound));
+                bound.ss_family = AF_INET;
+            }
         }
         // El origin_fd se deja registrado en OP_NOOP a propósito, parkeado para la
         // fase COPY de M4. El interés del cliente se arma vía request_reply ->
@@ -708,9 +869,23 @@ request_connecting(struct selector_key *key) {
     s->connecting.rep = request_connect_errno_rep(so_error);
     DBG("[conn #%u] request: connect falla errno=%d -> REP 0x%02x",
         s->id, so_error, s->connecting.rep);
-    if (s->origin_fd != -1
-            && selector_unregister_fd(key->s, s->origin_fd) != SELECTOR_SUCCESS) {
-        return ERROR;
+    // f11: desregistramos el origin fallido. selector_unregister_fd dispara
+    // socksv5_close, que cierra el fd y pone s->origin_fd=-1. Pero NO podemos
+    // depender de ese efecto (si el unregister falla, socksv5_close no corre):
+    // nulamos origin_fd y cerramos defensivamente acá, así el snapshot de
+    // socksv5_done no reintenta unregister sobre un fd ya consumido (evita f10).
+    if (s->origin_fd != -1) {
+        const int origin_fd = s->origin_fd;
+        if (selector_unregister_fd(key->s, origin_fd) != SELECTOR_SUCCESS) {
+            // unregister no corrió handle_close (socksv5_close): el fd sigue
+            // abierto y la ref que tomó request_start_connect no se liberó.
+            // Cerramos, nulamos y soltamos la ref a mano (no fatal, no aborta).
+            if (s->origin_fd != -1) {
+                close(origin_fd);
+                s->origin_fd = -1;
+                socks5_unref(s);
+            }
+        }
     }
     if (s->current_resolution != NULL) {
         return request_connect_next(key);
@@ -739,53 +914,6 @@ request_write(struct selector_key *key) {
         return ERROR;
     }
     return REQUEST_WRITE;
-}
-
-/** tabla de estados (índices correlativos con enum socks_v5state) */
-static const struct state_definition client_statbl[] = {
-    {
-        .state         = HELLO_READ,
-        .on_arrival    = hello_read_init,
-        .on_read_ready = hello_read,
-    }, {
-        .state          = HELLO_WRITE,
-        .on_write_ready = hello_write,
-    }, {
-        .state         = AUTH_READ,
-        .on_read_ready = auth_read,
-    }, {
-        .state          = AUTH_WRITE,
-        .on_write_ready = auth_write,
-    }, {
-        .state         = REQUEST_READ,
-        .on_arrival    = request_read_init,
-        .on_read_ready = request_read,
-    }, {
-        .state          = REQUEST_RESOLV,
-        .on_arrival     = request_resolv_init,
-        .on_block_ready = request_resolv_done,
-    }, {
-        .state          = REQUEST_CONNECTING,
-        .on_read_ready  = request_connecting_read,
-        .on_write_ready = request_connecting,
-    }, {
-        .state          = REQUEST_WRITE,
-        .on_write_ready = request_write,
-    }, {
-        .state          = COPY,
-        .on_arrival     = copy_init,
-        .on_read_ready  = copy_read,
-        .on_write_ready = copy_write,
-    }, {
-        .state = DONE,
-    }, {
-        .state = ERROR,
-    },
-};
-
-static const struct state_definition *
-socks5_describe_states(void) {
-    return client_statbl;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -847,9 +975,15 @@ socksv5_done(struct selector_key *key) {
     };
     for (unsigned i = 0; i < N(fds); i++) {
         if (fds[i] != -1) {
-            // unregister dispara handle_close (socksv5_close), que cierra el fd
-            if (selector_unregister_fd(key->s, fds[i]) != SELECTOR_SUCCESS) {
-                abort();
+            // unregister dispara handle_close (socksv5_close), que cierra el fd.
+            // f10: un fallo (p.ej. SELECTOR_IARGS si el fd ya fue consumido por
+            // otra ruta, como el cierre defensivo de request_connecting) NO es
+            // fatal: el fd ya está cerrado/fuera del selector. Logueamos y
+            // seguimos en vez de abort() (que mataría TODAS las conexiones).
+            const selector_status us = selector_unregister_fd(key->s, fds[i]);
+            if (us != SELECTOR_SUCCESS) {
+                DBG("[conn #%u] cierre: unregister fd=%d devolvió %d (ignorado)",
+                    ATTACHMENT(key)->id, fds[i], us);
             }
         }
     }

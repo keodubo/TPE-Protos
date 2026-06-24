@@ -142,7 +142,7 @@ main(void) {
         memcpy(&bound.sin_port, (uint8_t[]){0x1F, 0x90}, 2);
 
         uint8_t raw[16]; buffer b; buffer_init(&b, sizeof(raw), raw);
-        int n = request_marshall(&b, 0x00, &bound);
+        int n = request_marshall_addr(&b, 0x00, (struct sockaddr *)&bound);
         uint8_t expected[] = {
             0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x1F, 0x90
         };
@@ -154,7 +154,7 @@ main(void) {
     /* --- 8: marshall error con NULL -> 0.0.0.0:0 --- */
     {
         uint8_t raw[16]; buffer b; buffer_init(&b, sizeof(raw), raw);
-        int n = request_marshall(&b, 0x01, NULL);
+        int n = request_marshall_addr(&b, 0x01, NULL);
         uint8_t expected[] = {
             0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0
         };
@@ -200,7 +200,7 @@ main(void) {
     /* --- 11: marshall sin espacio (<10 bytes libres) devuelve -1 --- */
     {
         uint8_t raw[9]; buffer b; buffer_init(&b, sizeof(raw), raw);
-        int n = request_marshall(&b, 0x00, NULL);
+        int n = request_marshall_addr(&b, 0x00, NULL);
         CHECK(n == -1, "11: marshall devuelve -1 sin espacio (<10 libres)");
         CHECK(!buffer_can_read(&b), "11: no escribio bytes en el buffer");
     }
@@ -264,6 +264,115 @@ main(void) {
         CHECK(n == 22, "14: marshall IPv6 escribe 22 bytes");
         CHECK(buffer_matches(&b, expected, sizeof(expected)),
               "14: respuesta IPv6 success exacta");
+    }
+
+    /* --- 15: FQDN alimentado byte a byte --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[64]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t req[] = {
+            0x05, 0x01, 0x00, 0x03, 0x0B,
+            'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm',
+            0x00, 0x50
+        };
+        bool err = false;
+        enum request_state st = request_version;
+        for (size_t i = 0; i < sizeof(req); i++) {
+            fill(&b, &req[i], 1);
+            st = request_consume(&b, &p, &err);
+        }
+        CHECK(!err && request_is_done(st, &err),
+              "15: FQDN termina con bytes parciales");
+        CHECK(p.request.atyp == 0x03, "15: ATYP = FQDN");
+        CHECK(p.request.dst_fqdn_len == 11, "15: FQDN len = 11");
+        CHECK(strcmp(p.request.dst_fqdn, "example.com") == 0,
+              "15: FQDN NUL-terminado tras fragmentar");
+        CHECK(port_has_bytes(p.request.dst_port, 0x00, 0x50),
+              "15: puerto 80 en network byte order");
+    }
+
+    /* --- 16: IPv6 alimentado byte a byte --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[64]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t req[] = {
+            0x05, 0x01, 0x00, 0x04,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            0x1F, 0x90
+        };
+        bool err = false;
+        enum request_state st = request_version;
+        for (size_t i = 0; i < sizeof(req); i++) {
+            fill(&b, &req[i], 1);
+            st = request_consume(&b, &p, &err);
+        }
+        CHECK(!err && request_is_done(st, &err),
+              "16: IPv6 termina con bytes parciales");
+        CHECK(p.request.atyp == 0x04, "16: ATYP = IPv6");
+        CHECK(p.request.dst_addr_len == 16, "16: IPv6 len = 16");
+        CHECK(p.request.dst_addr[15] == 1, "16: IPv6 ::1 preservado");
+        CHECK(port_has_bytes(p.request.dst_port, 0x1F, 0x90),
+              "16: puerto 8080 en network byte order");
+    }
+
+    /* --- 17: FQDN de largo maximo (255) -> NUL en dst_fqdn[255] --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[512]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t req[4 + 1 + 255 + 2];
+        req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x03;
+        req[4] = 0xFF;  /* len = 255 */
+        for (int i = 0; i < 255; i++) {
+            req[5 + i] = 'a';
+        }
+        req[5 + 255]     = 0x00;
+        req[5 + 255 + 1] = 0x50;
+        bool err = false;
+        enum request_state st = request_version;
+        for (size_t i = 0; i < sizeof(req); i++) {
+            fill(&b, &req[i], 1);
+            st = request_consume(&b, &p, &err);
+        }
+        CHECK(!err && request_is_done(st, &err),
+              "17: FQDN de 255 termina sin error");
+        CHECK(p.request.dst_fqdn_len == 255, "17: FQDN len = 255");
+        CHECK(p.request.dst_fqdn[255] == '\0',
+              "17: NUL terminator en dst_fqdn[255]");
+        CHECK(strlen(p.request.dst_fqdn) == 255,
+              "17: FQDN tiene 255 chars antes del NUL");
+        CHECK(port_has_bytes(p.request.dst_port, 0x00, 0x50),
+              "17: puerto 80 en network byte order");
+    }
+
+    /* --- 18: FQDN len=0 -> error ATYP no soportado (REP 0x08) --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[16]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t req[] = { 0x05, 0x01, 0x00, 0x03, 0x00 };
+        fill(&b, req, sizeof(req));
+        bool err = false;
+        enum request_state st = request_consume(&b, &p, &err);
+        CHECK(err && request_is_done(st, &err),
+              "18: FQDN len=0 marca error");
+        CHECK(request_state_rep(st) == 0x08,
+              "18: REP address type not supported");
+    }
+
+    /* --- 19: FQDN con NUL embebido -> error ATYP no soportado --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[32]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t req[] = {
+            0x05, 0x01, 0x00, 0x03, 0x09,
+            'l', 'o', 'c', 'a', 'l', '\0', 'h', 'o', 'x'
+        };
+        fill(&b, req, sizeof(req));
+        bool err = false;
+        enum request_state st = request_consume(&b, &p, &err);
+        CHECK(err && request_is_done(st, &err),
+              "19: FQDN con NUL embebido marca error");
+        CHECK(request_state_rep(st) == 0x08,
+              "19: REP address type not supported");
     }
 
     printf("\n%d checks, %d failures\n", checks, failures);

@@ -13,8 +13,13 @@
 extern const char *
 sockaddr_to_human(char *buff, const size_t buffsize,
                   const struct sockaddr *addr) {
+    /* Bugfix compartido (D6): los helpers del toolkit deben tolerar buffers
+     * vacios. Con buffsize==0 no hay byte donde escribir ni terminador posible. */
+    if (buffsize == 0) {
+        return buff;
+    }
     if(addr == 0) {
-        strncpy(buff, "null", buffsize);
+        snprintf(buff, buffsize, "%s", "null");
         return buff;
     }
     in_port_t port;
@@ -33,23 +38,19 @@ sockaddr_to_human(char *buff, const size_t buffsize,
             handled = true;
             break;
     }
+    /* fix: armamos la IP en un temporal y construimos "ip:puerto" con un unico
+     * snprintf acotado a buffsize. Antes se usaba strncat(buff, ":", buffsize)
+     * pasando el tamano TOTAL del buffer (deberia ser el restante,
+     * buffsize-strlen(buff)-1), patron incorrecto/peligroso de la API. */
+    char ip[INET6_ADDRSTRLEN];
     if(handled) {
-        if (inet_ntop(addr->sa_family, p,  buff, buffsize) == 0) {
-            strncpy(buff, "unknown ip", buffsize);
-            buff[buffsize - 1] = 0;
+        if (inet_ntop(addr->sa_family, p, ip, sizeof(ip)) == 0) {
+            snprintf(ip, sizeof(ip), "%s", "unknown ip");
         }
+        snprintf(buff, buffsize, "%s:%d", ip, ntohs(port));
     } else {
-        strncpy(buff, "unknown", buffsize);
+        snprintf(buff, buffsize, "%s", "unknown");
     }
-
-    strncat(buff, ":", buffsize);
-    buff[buffsize - 1] = 0;
-    const size_t len = strlen(buff);
-
-    if(handled) {
-        snprintf(buff + len, buffsize - len, "%d", ntohs(port));
-    }
-    buff[buffsize - 1] = 0;
 
     return buff;
 }
@@ -98,4 +99,3 @@ sock_blocking_copy(const int source, const int dest) {
 
     return ret;
 }
-

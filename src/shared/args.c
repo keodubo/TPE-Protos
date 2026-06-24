@@ -15,11 +15,10 @@ port(const char* s)
 
     if (end == s || '\0' != *end
         || ((LONG_MIN == sl || LONG_MAX == sl) && ERANGE == errno)
-        || sl < 0 || sl > USHRT_MAX)
+        || sl < 1 || sl > 65535)
     {
-        fprintf(stderr, "port should in in the range of 1-65536: %s\n", s);
+        fprintf(stderr, "port should be in the range 1-65535: %s\n", s);
         exit(1);
-        return 1;
     }
     return (unsigned short)sl;
 }
@@ -30,7 +29,7 @@ user(char* s, struct users* user)
     char* p = strchr(s, ':');
     if (p == NULL)
     {
-        fprintf(stderr, "password not found\n");
+        fprintf(stderr, "contraseña no encontrada (formato esperado <name>:<pass>)\n");
         exit(1);
     }
     else
@@ -45,9 +44,8 @@ user(char* s, struct users* user)
 static void
 version(void)
 {
-    fprintf(stderr, "socks5v version 0.0\n"
-            "ITBA Protocolos de Comunicación 2025/1 -- Grupo X\n"
-            "AQUI VA LA LICENCIA\n");
+    fprintf(stderr, "socks5v version 1.0\n"
+            "ITBA Protocolos de Comunicación 2026C1\n");
 }
 
 static void
@@ -119,7 +117,7 @@ parse_args(const int argc, char** argv, struct socks5args* args)
         case 'u':
             if (nusers >= MAX_USERS)
             {
-                fprintf(stderr, "maximun number of command line users reached: %d.\n", MAX_USERS);
+                fprintf(stderr, "se alcanzó el máximo de usuarios por línea de comandos: %d.\n", MAX_USERS);
                 exit(1);
             }
             else
@@ -132,7 +130,7 @@ parse_args(const int argc, char** argv, struct socks5args* args)
             version();
             exit(0);
         default:
-            fprintf(stderr, "unknown argument %d.\n", c);
+            fprintf(stderr, "argumento desconocido %d.\n", c);
             exit(1);
         }
     }

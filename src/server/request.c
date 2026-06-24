@@ -62,6 +62,10 @@ request_parser_feed(struct request_parser *p, const uint8_t b) {
             break;
         case request_dst_addr:
             if (p->request.atyp == REQUEST_ATYP_DOMAINNAME) {
+                if (b == 0) {
+                    p->state = request_error_unsupported_atyp;
+                    break;
+                }
                 p->request.dst_fqdn[p->addr_idx] = (char)b;
             } else {
                 p->request.dst_addr[p->addr_idx] = b;
@@ -125,6 +129,23 @@ request_consume(buffer *b, struct request_parser *p, bool *errored) {
     return st;
 }
 
+/*
+ * Mapea un estado terminal del parser a su REP SOCKS5. En produccion el caller
+ * (request_drive en socks5nio.c) la invoca en la rama de error (errored==true);
+ * el camino de exito serializa su REP por separado (request_process). Aun asi
+ * incluimos case request_done -> 0x00 (success) para que la funcion sea total
+ * sobre los estados terminales y verificable de forma blackbox.
+ *
+ * Notas RFC1928:
+ * - VER != 0x05 (request_error_invalid_version): este case existe por completitud
+ *   del switch, pero NO se ejercita en producción. request_drive (socks5nio.c)
+ *   intercepta la versión inválida ANTES de llamar a request_state_rep y CIERRA
+ *   sin responder (uniforme con HELLO), porque el cliente no habla SOCKS5 y el RFC
+ *   no define REP para versión inválida. Decisión D8.1 en DECISIONS.md.
+ * - RSV != 0x00 (request_error_invalid_reserved): validacion estricta (el RFC
+ *   exige RSV==0x00). No hay REP especifico, asi que cae en GENERAL_FAILURE.
+ *   Decision documentada en DECISIONS.md.
+ */
 uint8_t
 request_state_rep(const enum request_state state) {
     switch (state) {
@@ -145,7 +166,7 @@ static int
 request_marshall_ipv4(buffer *b, const uint8_t rep, const struct sockaddr_in *bound_addr) {
     size_t   n;
     uint8_t *p = buffer_write_ptr(b, &n);
-    if (n < 10) {
+    if (n < REQUEST_REPLY_IPV4_LEN) {
         return -1;
     }
 
@@ -159,15 +180,15 @@ request_marshall_ipv4(buffer *b, const uint8_t rep, const struct sockaddr_in *bo
         memcpy(p + 4, &bound_addr->sin_addr.s_addr, 4);
         memcpy(p + 8, &bound_addr->sin_port, 2);
     }
-    buffer_write_adv(b, 10);
-    return 10;
+    buffer_write_adv(b, REQUEST_REPLY_IPV4_LEN);
+    return REQUEST_REPLY_IPV4_LEN;
 }
 
 static int
 request_marshall_ipv6(buffer *b, const uint8_t rep, const struct sockaddr_in6 *bound_addr) {
     size_t   n;
     uint8_t *p = buffer_write_ptr(b, &n);
-    if (n < 22) {
+    if (n < REQUEST_REPLY_IPV6_LEN) {
         return -1;
     }
 
@@ -181,13 +202,8 @@ request_marshall_ipv6(buffer *b, const uint8_t rep, const struct sockaddr_in6 *b
         memcpy(p + 4, &bound_addr->sin6_addr, 16);
         memcpy(p + 20, &bound_addr->sin6_port, 2);
     }
-    buffer_write_adv(b, 22);
-    return 22;
-}
-
-int
-request_marshall(buffer *b, const uint8_t rep, const struct sockaddr_in *bound_addr) {
-    return request_marshall_ipv4(b, rep, bound_addr);
+    buffer_write_adv(b, REQUEST_REPLY_IPV6_LEN);
+    return REQUEST_REPLY_IPV6_LEN;
 }
 
 int

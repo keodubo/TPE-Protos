@@ -20,6 +20,10 @@
 #     post-reply)
 #   - cliente cierra / floodea DURANTE un connect pendiente (IP no ruteable):
 #     ejercita el teardown con origin fd registrado y connect en vuelo
+#   - APAGADO BAJO CARGA DNS (f14): ráfaga de CONNECT por FQDN que lanzan
+#     getaddrinfo en hilos detached, con cierres tempranos del cliente; el
+#     SIGTERM puede caer con resoluciones en vuelo -> valida el drenaje de hilos
+#     DNS (sin UAF del selector ni leak del struct socks5/origin_resolution)
 #
 # Uso (Linux con valgrind + python3; p.ej. pampero):
 #   bash test/valgrind_traffic.sh [puerto]
@@ -169,6 +173,28 @@ full(mkreq(0x01, 0x09, dport=80)); n += 1
 
 # FQDN localhost: ejercita pthread getaddrinfo + notify_block + connect
 full(mkreq(0x01, 0x03, dport=org.port, fqdn=b"localhost")); n += 1
+
+# f14: APAGADO BAJO CARGA DNS. Disparamos un puñado de CONNECT por FQDN que
+# lanzan getaddrinfo en hilos detached y, en algunos casos, cortamos el cliente
+# sin esperar la respuesta (EOF mientras el hilo DNS puede seguir en vuelo). El
+# SIGTERM al server (más abajo) puede caer mientras hay resoluciones pendientes:
+# así se ejercita el DRENAJE de hilos DNS de main.c (resolv_pending_count) y se
+# valida que NO haya UAF del selector ni leak del struct socks5/origin_resolution
+# (el objeto con la ref del hilo DNS no está en el pool al destruirlo).
+def fqdn_abort(name):
+    # handshake + REQUEST FQDN y cierre inmediato sin leer la reply.
+    try:
+        s = conn(); handshake(s)
+        s.sendall(mkreq(0x01, 0x03, dport=org.port, fqdn=name))
+        s.close()   # EOF posible mientras getaddrinfo sigue corriendo
+    except OSError:
+        pass
+
+dns_names = [b"localhost", b"localhost", b"localhost.localdomain", b"localhost"]
+dns_threads = [threading.Thread(target=fqdn_abort, args=(nm,)) for nm in dns_names]
+[t.start() for t in dns_threads]
+[t.join() for t in dns_threads]
+n += len(dns_threads)
 
 # pipelined HELLO+AUTH+REQUEST + payload temprano
 s = conn()

@@ -138,6 +138,18 @@ typedef struct fd_handler {
 
 } fd_handler;
 
+/** cleanup opcional de un trabajo bloqueante, ejecutado en el hilo del selector */
+typedef void (*selector_block_cleanup)(struct selector_key *key);
+
+/** job reservado para que un worker pueda notificar sin alocar al terminar */
+typedef struct selector_block_job selector_block_job;
+
+selector_block_job *
+selector_block_job_new(void);
+
+void
+selector_block_job_free(selector_block_job *job);
+
 /**
  * registra en el selector `s' un nuevo file descriptor `fd'.
  *
@@ -191,5 +203,23 @@ selector_fd_set_nio(const int fd);
 selector_status
 selector_notify_block(fd_selector s,
                  const int   fd);
+
+/**
+ * Variante con identidad de adjunto: el block se despacha sólo si el fd sigue
+ * registrado con `data`. El cleanup corre siempre que el job se procese, incluso
+ * si el fd fue cerrado/reutilizado y el callback no se despacha.
+ */
+selector_status
+selector_notify_block_with_data(fd_selector s,
+                                const int fd,
+                                void *data,
+                                selector_block_cleanup cleanup);
+
+selector_status
+selector_notify_block_reserved(fd_selector s,
+                               const int fd,
+                               void *data,
+                               selector_block_cleanup cleanup,
+                               selector_block_job *job);
 
 #endif
