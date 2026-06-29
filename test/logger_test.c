@@ -53,10 +53,10 @@ main(void) {
     CHECK(strstr(out, "\tuser1\t127.0.0.1:53122\texample.com:80\tOK\n") != NULL,
           "1: campos OK separados por tabs");
 
+    fclose(mem);
     free(out);
     out = NULL;
     out_len = 0;
-    fclose(mem);
 
     mem = open_memstream(&out, &out_len);
     if (mem == NULL) {

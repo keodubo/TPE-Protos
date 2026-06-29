@@ -35,6 +35,7 @@
 #include "users.h"
 #include "dbg.h"
 #include "metrics.h"
+#include "logger.h"
 #include "socks5.h"
 #include "socks5nio.h"
 
@@ -396,10 +397,17 @@ hello_write(struct selector_key *key) {
 /** valida credenciales, serializa la respuesta y pasa a AUTH_WRITE */
 static unsigned
 auth_process(struct auth_st *d, struct selector_key *key) {
+    struct socks5 *s = ATTACHMENT(key);
     const bool ok = users_validate_len(d->parser.uname, d->parser.ulen,
                                        d->parser.passwd, d->parser.plen);
     d->status = ok ? AUTH_STATUS_OK : AUTH_STATUS_FAIL;
-    DBG("[conn #%u] auth: ulen=%u -> %s", ATTACHMENT(key)->id,
+    if (ok) {
+        const size_t ulen = d->parser.ulen < sizeof(s->username) - 1
+                          ? d->parser.ulen : sizeof(s->username) - 1;
+        memcpy(s->username, d->parser.uname, ulen);
+        s->username[ulen] = '\0';
+    }
+    DBG("[conn #%u] auth: ulen=%u -> %s", s->id,
         (unsigned)d->parser.ulen, ok ? "OK" : "RECHAZADO");
     if (auth_marshall(d->wb, d->status) == -1
             || selector_set_interest_key(key, OP_WRITE) != SELECTOR_SUCCESS) {
@@ -504,6 +512,46 @@ client_set_interest(struct selector_key *key, const fd_interest interest) {
     return selector_set_interest(key->s, s->client_fd, interest);
 }
 
+static void
+request_store_access_target(struct socks5 *s, const struct request *r) {
+    s->dest_port = ntohs(r->dst_port);
+
+    if (r->atyp == REQUEST_ATYP_DOMAINNAME) {
+        const size_t len = r->dst_fqdn_len < sizeof(s->dest_host) - 1
+                         ? r->dst_fqdn_len : sizeof(s->dest_host) - 1;
+        memcpy(s->dest_host, r->dst_fqdn, len);
+        s->dest_host[len] = '\0';
+        return;
+    }
+
+    const int family = r->atyp == REQUEST_ATYP_IPV4 ? AF_INET
+                     : r->atyp == REQUEST_ATYP_IPV6 ? AF_INET6 : AF_UNSPEC;
+    if (family == AF_UNSPEC
+            || inet_ntop(family, r->dst_addr,
+                         s->dest_host, sizeof(s->dest_host)) == NULL) {
+        s->dest_host[0] = '-';
+        s->dest_host[1] = '\0';
+    }
+}
+
+static void
+request_log_access_once(struct selector_key *key, const uint8_t rep) {
+    struct socks5 *s = ATTACHMENT(key);
+    if (s->access_logged || s->dest_host[0] == '\0') {
+        return;
+    }
+
+    const enum access_result result = rep == REQUEST_REP_SUCCEEDED
+                                    ? ACCESS_OK : ACCESS_FAIL;
+    logger_log_access(s->username,
+                      (const struct sockaddr *) &s->client_addr,
+                      s->dest_host, s->dest_port, result);
+    s->access_logged = true;
+    if (result == ACCESS_FAIL) {
+        metrics_connection_failed();
+    }
+}
+
 static unsigned
 request_reply(struct selector_key *key,
               const uint8_t rep,
@@ -515,6 +563,7 @@ request_reply(struct selector_key *key,
             || client_set_interest(key, OP_WRITE) != SELECTOR_SUCCESS) {
         return ERROR;
     }
+    request_log_access_once(key, rep);
     return REQUEST_WRITE;
 }
 
@@ -610,6 +659,7 @@ static unsigned
 request_process(struct selector_key *key) {
     struct request_st     *d = &ATTACHMENT(key)->client.request;
     const struct request  *r = &d->parser.request;
+    request_store_access_target(ATTACHMENT(key), r);
 
     if (r->atyp == REQUEST_ATYP_IPV4) {
         struct sockaddr_in addr;

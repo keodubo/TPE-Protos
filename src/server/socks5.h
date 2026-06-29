@@ -97,6 +97,10 @@ struct socks5 {
     struct sockaddr_storage client_addr;
     socklen_t               client_addr_len;
     unsigned                id;
+    char                    username[AUTH_MAX_FIELD + 1];
+    char                    dest_host[REQUEST_FQDN_MAX + 1];
+    unsigned                dest_port;
+    bool                    access_logged;
 
     struct state_machine    stm;
 
