@@ -35,6 +35,7 @@
 #include "users.h"
 #include "metrics.h"
 #include "logger.h"
+#include "mgmt.h"
 
 /*
  * Definido en resolv.c. Cantidad de hilos de resolución DNS aún en vuelo.
@@ -140,6 +141,7 @@ main(const int argc, char **argv) {
     selector_status ss       = SELECTOR_SUCCESS;
     fd_selector     selector = NULL;
     int             socks_fd = -1;
+    int             mgmt_fd  = -1;
 
     socks_fd = setup_passive_socket(args.socks_addr, args.socks_port, &err_msg);
     if (socks_fd < 0) {
@@ -147,6 +149,13 @@ main(const int argc, char **argv) {
     }
     fprintf(stdout, "[socks5] proxy escuchando en %s:%u\n",
             args.socks_addr, args.socks_port);
+
+    mgmt_fd = setup_passive_socket(args.mng_addr, args.mng_port, &err_msg);
+    if (mgmt_fd < 0) {
+        goto finally;
+    }
+    fprintf(stdout, "[mgmt] servicio escuchando en %s:%u\n",
+            args.mng_addr, args.mng_port);
 
     const struct selector_init conf = {
         .signal = SIGALRM,
@@ -172,6 +181,17 @@ main(const int argc, char **argv) {
     ss = selector_register(selector, socks_fd, &passive, OP_READ, NULL);
     if (ss != SELECTOR_SUCCESS) {
         err_msg = "no se pudo registrar el socket pasivo";
+        goto finally;
+    }
+    const struct fd_handler mgmt_passive = {
+        .handle_read  = mgmt_passive_accept,
+        .handle_write = NULL,
+        .handle_close = NULL,
+        .handle_block = NULL,
+    };
+    ss = selector_register(selector, mgmt_fd, &mgmt_passive, OP_READ, NULL);
+    if (ss != SELECTOR_SUCCESS) {
+        err_msg = "no se pudo registrar el socket pasivo de management";
         goto finally;
     }
 
@@ -229,6 +249,9 @@ finally:
     socksv5_pool_destroy();
     if (socks_fd >= 0) {
         close(socks_fd);
+    }
+    if (mgmt_fd >= 0) {
+        close(mgmt_fd);
     }
     return ret;
 }

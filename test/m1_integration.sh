@@ -3,12 +3,13 @@
 # Verifica la negociación de método extremo a extremo (bytes en el cable).
 set -u
 PORT="${1:-11080}"
+MGMT_PORT=$((PORT + 1000))
 cd "$(dirname "$0")/.."
 
 echo "== build server =="
 make server >/tmp/m1_build.log 2>&1 || { echo "BUILD FALLA"; cat /tmp/m1_build.log; exit 1; }
 
-./bin/server -p "$PORT" -u user:pass >/tmp/m1_srv.log 2>&1 &
+./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >/tmp/m1_srv.log 2>&1 &
 SRV=$!
 sleep 0.5
 

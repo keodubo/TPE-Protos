@@ -2,12 +2,13 @@
 # test/m4_integration.sh - integracion del relay COPY bidireccional.
 set -u
 PORT="${1:-11084}"
+MGMT_PORT=$((PORT + 1000))
 cd "$(dirname "$0")/.."
 
 echo "== build server =="
 make server >/tmp/m4_build.log 2>&1 || { echo "BUILD FALLA"; cat /tmp/m4_build.log; exit 1; }
 
-./bin/server -p "$PORT" -u user:pass >/tmp/m4_srv.log 2>&1 &
+./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >/tmp/m4_srv.log 2>&1 &
 SRV=$!
 cleanup() {
     kill -TERM "$SRV" 2>/dev/null

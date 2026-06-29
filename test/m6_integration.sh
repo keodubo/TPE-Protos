@@ -2,6 +2,7 @@
 # test/m6_integration.sh - smoke M6: access-log real del flujo SOCKS5.
 set -u
 PORT="${1:-11086}"
+MGMT_PORT=$((PORT + 1000))
 cd "$(dirname "$0")/.."
 
 LOG="/tmp/m6_srv_${PORT}.log"
@@ -11,7 +12,7 @@ echo "== build server =="
 make server >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1; }
 
 : >"$LOG"
-./bin/server -p "$PORT" -u user:pass >"$LOG" 2>&1 &
+./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >"$LOG" 2>&1 &
 SRV=$!
 cleanup() {
     kill -TERM "$SRV" 2>/dev/null

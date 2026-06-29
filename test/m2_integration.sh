@@ -3,12 +3,13 @@
 # socket real. Hace HELLO (05 01 02) y luego el sub-handshake 01 ULEN U PLEN P.
 set -u
 PORT="${1:-11082}"
+MGMT_PORT=$((PORT + 1000))
 cd "$(dirname "$0")/.."
 
 echo "== build server =="
 make server >/tmp/m2_build.log 2>&1 || { echo "BUILD FALLA"; cat /tmp/m2_build.log; exit 1; }
 
-./bin/server -p "$PORT" -u user:pass >/tmp/m2_srv.log 2>&1 &
+./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >/tmp/m2_srv.log 2>&1 &
 SRV=$!
 sleep 0.5
 

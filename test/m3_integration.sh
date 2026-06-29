@@ -3,12 +3,13 @@
 # Habla SOCKS5 por sockets reales: HELLO, AUTH y REQUEST.
 set -u
 PORT="${1:-11083}"
+MGMT_PORT=$((PORT + 1000))
 cd "$(dirname "$0")/.."
 
 echo "== build server =="
 make server >/tmp/m3_build.log 2>&1 || { echo "BUILD FALLA"; cat /tmp/m3_build.log; exit 1; }
 
-./bin/server -p "$PORT" -u user:pass >/tmp/m3_srv.log 2>&1 &
+./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >/tmp/m3_srv.log 2>&1 &
 SRV=$!
 cleanup() {
     kill -TERM "$SRV" 2>/dev/null
