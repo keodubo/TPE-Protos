@@ -34,6 +34,7 @@
 #include "resolv.h"
 #include "users.h"
 #include "dbg.h"
+#include "metrics.h"
 #include "socks5.h"
 #include "socks5nio.h"
 
@@ -260,6 +261,7 @@ socksv5_passive_accept(struct selector_key *key) {
             != SELECTOR_SUCCESS) {
         goto fail;
     }
+    metrics_connection_opened();
     return;
 fail:
     if (client != -1) {
@@ -943,6 +945,7 @@ socksv5_close(struct selector_key *key) {
     // sólo desregistra; el close() real ocurre acá, una sola vez por fd.
     struct socks5 *s = ATTACHMENT(key);
     if (key->fd == s->client_fd) {
+        metrics_connection_closed();
         s->client_fd = -1;
     } else if (key->fd == s->origin_fd) {
         s->origin_fd = -1;

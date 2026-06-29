@@ -46,10 +46,11 @@ TEST_COPY=$(OUTPUT_FOLDER)/copy_test
 TEST_NETUTILS=$(OUTPUT_FOLDER)/netutils_test
 TEST_SELECTOR_BLOCK=$(OUTPUT_FOLDER)/selector_block_test
 TEST_METRICS=$(OUTPUT_FOLDER)/metrics_test
+TEST_LOGGER=$(OUTPUT_FOLDER)/logger_test
 
 test: $(TEST_HELLO) $(TEST_DBG) $(TEST_AUTH) $(TEST_USERS) $(TEST_REQUEST) \
       $(TEST_CONNECT) $(TEST_COPY) $(TEST_NETUTILS) $(TEST_SELECTOR_BLOCK) \
-      $(TEST_METRICS)
+      $(TEST_METRICS) $(TEST_LOGGER)
 	$(TEST_HELLO)
 	$(TEST_DBG)
 	$(TEST_AUTH)
@@ -60,6 +61,7 @@ test: $(TEST_HELLO) $(TEST_DBG) $(TEST_AUTH) $(TEST_USERS) $(TEST_REQUEST) \
 	$(TEST_NETUTILS)
 	$(TEST_SELECTOR_BLOCK)
 	$(TEST_METRICS)
+	$(TEST_LOGGER)
 
 $(TEST_AUTH): test/auth_test.c src/server/auth.c src/shared/buffer.c
 	mkdir -p $(OUTPUT_FOLDER)
@@ -82,7 +84,7 @@ $(TEST_CONNECT): test/connect_test.c src/server/connect.c src/shared/selector.c
 
 # copy_test arma un selector real + socketpairs: linkea copy.c + selector.c +
 # buffer.c, con -pthread (selector usa pthread). No depende de socks5nio.c.
-$(TEST_COPY): test/copy_test.c src/server/copy.c src/shared/selector.c src/shared/buffer.c
+$(TEST_COPY): test/copy_test.c src/server/copy.c src/server/metrics.c src/shared/selector.c src/shared/buffer.c
 	mkdir -p $(OUTPUT_FOLDER)
 	$(COMPILER) $(COMPILER_FLAGS) $(LD_FLAGS) $^ -o $(TEST_COPY)
 
@@ -97,6 +99,10 @@ $(TEST_SELECTOR_BLOCK): test/selector_block_test.c src/shared/selector.c
 $(TEST_METRICS): test/metrics_test.c src/server/metrics.c
 	mkdir -p $(OUTPUT_FOLDER)
 	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_METRICS)
+
+$(TEST_LOGGER): test/logger_test.c src/server/logger.c src/shared/netutils.c src/shared/buffer.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_LOGGER)
 
 # integración sobre el socket real (levanta el server y habla SOCKS5)
 PORT?=11080

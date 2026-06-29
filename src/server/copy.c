@@ -4,6 +4,7 @@
 
 #include "copy.h"
 #include "socks5.h"   /* ATTACHMENT y el fallback de MSG_NOSIGNAL viven acá (f26) */
+#include "metrics.h"
 
 static struct copy *
 copy_for_key(struct selector_key *key) {
@@ -120,6 +121,7 @@ copy_read(struct selector_key *key) {
         const ssize_t n = recv(*c->fd, ptr, count, 0);
         if (n > 0) {
             buffer_write_adv(c->rb, n);
+            metrics_add_bytes((size_t) n);
         } else if (n == 0) {
             c->duplex = INTEREST_OFF(c->duplex, OP_READ);
             copy_maybe_shutdown_peer(c);

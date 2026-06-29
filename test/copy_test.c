@@ -29,6 +29,7 @@
 #include "selector.h"
 #include "copy.h"
 #include "socks5.h"
+#include "metrics.h"
 
 static int checks = 0, failures = 0;
 #define CHECK(cond, msg) do {                                  \
@@ -363,11 +364,14 @@ main(void) {
         copy_init(COPY, &kinit);
 
         const char *payload = "hola-relay";
+        metrics_init();
         (void) write(cli[1], payload, strlen(payload));
 
         struct selector_key kc = { .s = s, .fd = cli[0], .data = &s5 };
         unsigned r1 = copy_read(&kc);   /* carga read_buffer (rb del cliente) */
         CHECK(r1 == COPY, "8: copy_read del cliente sigue en COPY");
+        CHECK(metrics_get()->bytes_transferred == strlen(payload),
+              "8: copy_read suma bytes reales a métricas");
 
         struct selector_key ko = { .s = s, .fd = ori[0], .data = &s5 };
         unsigned r2 = copy_write(&ko);  /* drena hacia ori[0] -> peer ori[1] */

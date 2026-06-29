@@ -33,6 +33,7 @@
 #include "selector.h"
 #include "socks5nio.h"
 #include "users.h"
+#include "metrics.h"
 
 /*
  * Definido en resolv.c. Cantidad de hilos de resolución DNS aún en vuelo.
@@ -117,6 +118,7 @@ int
 main(const int argc, char **argv) {
     struct socks5args args;
     parse_args(argc, argv, &args);
+    metrics_init();
 
     // cargar la tabla de usuarios del proxy (RFC1929) desde los -u name:pass
     for (int i = 0; i < MAX_USERS && args.users[i].name != NULL; i++) {
