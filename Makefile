@@ -45,9 +45,11 @@ TEST_CONNECT=$(OUTPUT_FOLDER)/connect_test
 TEST_COPY=$(OUTPUT_FOLDER)/copy_test
 TEST_NETUTILS=$(OUTPUT_FOLDER)/netutils_test
 TEST_SELECTOR_BLOCK=$(OUTPUT_FOLDER)/selector_block_test
+TEST_METRICS=$(OUTPUT_FOLDER)/metrics_test
 
 test: $(TEST_HELLO) $(TEST_DBG) $(TEST_AUTH) $(TEST_USERS) $(TEST_REQUEST) \
-      $(TEST_CONNECT) $(TEST_COPY) $(TEST_NETUTILS) $(TEST_SELECTOR_BLOCK)
+      $(TEST_CONNECT) $(TEST_COPY) $(TEST_NETUTILS) $(TEST_SELECTOR_BLOCK) \
+      $(TEST_METRICS)
 	$(TEST_HELLO)
 	$(TEST_DBG)
 	$(TEST_AUTH)
@@ -57,6 +59,7 @@ test: $(TEST_HELLO) $(TEST_DBG) $(TEST_AUTH) $(TEST_USERS) $(TEST_REQUEST) \
 	$(TEST_COPY)
 	$(TEST_NETUTILS)
 	$(TEST_SELECTOR_BLOCK)
+	$(TEST_METRICS)
 
 $(TEST_AUTH): test/auth_test.c src/server/auth.c src/shared/buffer.c
 	mkdir -p $(OUTPUT_FOLDER)
@@ -90,6 +93,10 @@ $(TEST_NETUTILS): test/netutils_test.c src/shared/netutils.c src/shared/buffer.c
 $(TEST_SELECTOR_BLOCK): test/selector_block_test.c src/shared/selector.c
 	mkdir -p $(OUTPUT_FOLDER)
 	$(COMPILER) $(COMPILER_FLAGS) $(LD_FLAGS) $^ -o $(TEST_SELECTOR_BLOCK)
+
+$(TEST_METRICS): test/metrics_test.c src/server/metrics.c
+	mkdir -p $(OUTPUT_FOLDER)
+	$(COMPILER) $(COMPILER_FLAGS) $^ -o $(TEST_METRICS)
 
 # integración sobre el socket real (levanta el server y habla SOCKS5)
 PORT?=11080
