@@ -301,6 +301,51 @@ mgmt_cmd_metrics(struct mgmt_conn *conn) {
 }
 
 static enum mgmt_state
+mgmt_cmd_get_config(struct mgmt_conn *conn, char *key) {
+    if (strcmp(key, "buffer-size") == 0) {
+        if (!mgmt_queuef(conn, "+OK %zu\r\n", socksv5_buffer_size())) {
+            conn->after_write = MGMT_ERROR;
+        } else {
+            conn->after_write = MGMT_REQUEST;
+        }
+    } else {
+        mgmt_set_response(conn, "-ERR unknown key\r\n", MGMT_REQUEST);
+    }
+    return MGMT_REQUEST;
+}
+
+static bool
+mgmt_parse_size(const char *s, size_t *out) {
+    if (!mgmt_is_value(s)) {
+        return false;
+    }
+    errno = 0;
+    char *end = NULL;
+    const unsigned long value = strtoul(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0') {
+        return false;
+    }
+    *out = (size_t) value;
+    return (unsigned long) *out == value;
+}
+
+static enum mgmt_state
+mgmt_cmd_set_config(struct mgmt_conn *conn, char *key, char *value) {
+    if (strcmp(key, "buffer-size") != 0) {
+        mgmt_set_response(conn, "-ERR unknown key\r\n", MGMT_REQUEST);
+        return MGMT_REQUEST;
+    }
+
+    size_t size = 0;
+    if (!mgmt_parse_size(value, &size) || !socksv5_buffer_size_set(size)) {
+        mgmt_set_response(conn, "-ERR bad value\r\n", MGMT_REQUEST);
+    } else {
+        mgmt_set_response(conn, "+OK\r\n", MGMT_REQUEST);
+    }
+    return MGMT_REQUEST;
+}
+
+static enum mgmt_state
 mgmt_handle_line(struct mgmt_conn *conn, const enum mgmt_state current) {
     char *argv[4];
     const int argc = mgmt_split(conn->line, argv, 4);
@@ -344,6 +389,12 @@ mgmt_handle_line(struct mgmt_conn *conn, const enum mgmt_state current) {
         }
         if (argc == 1 && strcmp(argv[0], "METRICS") == 0) {
             return mgmt_cmd_metrics(conn);
+        }
+        if (argc == 2 && strcmp(argv[0], "GET-CONFIG") == 0) {
+            return mgmt_cmd_get_config(conn, argv[1]);
+        }
+        if (argc == 3 && strcmp(argv[0], "SET-CONFIG") == 0) {
+            return mgmt_cmd_set_config(conn, argv[1], argv[2]);
         }
         if (argc == 1 && strcmp(argv[0], "QUIT") == 0) {
             mgmt_set_response(conn, "+OK bye\r\n", MGMT_DONE);

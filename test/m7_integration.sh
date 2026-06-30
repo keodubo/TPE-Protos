@@ -190,6 +190,34 @@ got = mgmt_exchange(
 check(got == [b"+OK 1\r\n", b"+OK\r\n", b"+OK bye\r\n"],
       "M: QUIT responde bye", got)
 
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nGET-CONFIG buffer-size\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"+OK 8192\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"+OK 8192\r\n"],
+      "N: GET-CONFIG buffer-size devuelve default", got)
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nSET-CONFIG buffer-size 16384\r\nGET-CONFIG buffer-size\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"+OK\r\n", b"+OK 16384\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"+OK\r\n", b"+OK 16384\r\n"],
+      "O: SET-CONFIG buffer-size cambia runtime", got)
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nGET-CONFIG nope\r\nSET-CONFIG nope 1\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"-ERR unknown key\r\n", b"-ERR unknown key\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"-ERR unknown key\r\n", b"-ERR unknown key\r\n"],
+      "P: GET/SET-CONFIG key desconocida -> -ERR unknown key", got)
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nSET-CONFIG buffer-size 21\r\nSET-CONFIG buffer-size abc\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"-ERR bad value\r\n", b"-ERR bad value\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"-ERR bad value\r\n", b"-ERR bad value\r\n"],
+      "Q: SET-CONFIG buffer-size valida rango y numero", got)
+
 print(f"== RESULTADO M7: {checks - failures} ok, {failures} fallas ==")
 sys.exit(0 if failures == 0 else 1)
 PY

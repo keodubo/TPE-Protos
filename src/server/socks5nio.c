@@ -49,6 +49,7 @@
 static struct socks5  *pool      = NULL;
 static unsigned        pool_size = 0;
 static const unsigned  max_pool  = 50;
+static size_t          io_buffer_size = IO_BUFFER_SIZE;
 
 /** contador de conexiones (para identificarlas en los logs) */
 static unsigned        conn_counter = 0;
@@ -119,20 +120,82 @@ static const struct state_definition client_statbl[] = {
 static unsigned hello_to_auth(struct selector_key *key);
 static unsigned auth_to_request(struct selector_key *key);
 
+size_t
+socksv5_buffer_size(void) {
+    return io_buffer_size;
+}
+
+bool
+socksv5_buffer_size_set(const size_t size) {
+    if (size < IO_BUFFER_SIZE_MIN || size > IO_BUFFER_SIZE_MAX) {
+        return false;
+    }
+    io_buffer_size = size;
+    return true;
+}
+
+static void
+socks5_buffers_free(struct socks5 *s) {
+    if (s == NULL) {
+        return;
+    }
+    free(s->raw_buff_a);
+    free(s->raw_buff_b);
+    s->raw_buff_a = NULL;
+    s->raw_buff_b = NULL;
+    s->raw_buff_size = 0;
+}
+
+static bool
+socks5_buffers_resize(struct socks5 *s, const size_t size) {
+    if (s->raw_buff_a != NULL && s->raw_buff_b != NULL
+            && s->raw_buff_size == size) {
+        return true;
+    }
+
+    uint8_t *a = malloc(size);
+    uint8_t *b = malloc(size);
+    if (a == NULL || b == NULL) {
+        free(a);
+        free(b);
+        return false;
+    }
+
+    socks5_buffers_free(s);
+    s->raw_buff_a = a;
+    s->raw_buff_b = b;
+    s->raw_buff_size = size;
+    return true;
+}
+
 static struct socks5 *
 socks5_new(const int client_fd) {
     struct socks5 *ret;
     if (pool == NULL) {
         ret = malloc(sizeof(*ret));
+        if (ret != NULL) {
+            memset(ret, 0, sizeof(*ret));
+        }
     } else {
-        ret       = pool;
-        pool      = pool->next;
+        ret = pool;
+        pool = pool->next;
         pool_size--;
+        uint8_t *raw_a = ret->raw_buff_a;
+        uint8_t *raw_b = ret->raw_buff_b;
+        const size_t raw_size = ret->raw_buff_size;
+        memset(ret, 0, sizeof(*ret));
+        ret->raw_buff_a = raw_a;
+        ret->raw_buff_b = raw_b;
+        ret->raw_buff_size = raw_size;
     }
     if (ret == NULL) {
         return NULL;
     }
-    memset(ret, 0, sizeof(*ret));
+    if (!socks5_buffers_resize(ret, io_buffer_size)) {
+        socks5_buffers_free(ret);
+        free(ret);
+        return NULL;
+    }
     ret->client_fd  = client_fd;
     ret->origin_fd  = -1;
     ret->references = 1;
@@ -142,8 +205,8 @@ socks5_new(const int client_fd) {
     ret->stm.states    = client_statbl;
     stm_init(&ret->stm);
 
-    buffer_init(&ret->read_buffer,  N(ret->raw_buff_a), ret->raw_buff_a);
-    buffer_init(&ret->write_buffer, N(ret->raw_buff_b), ret->raw_buff_b);
+    buffer_init(&ret->read_buffer,  ret->raw_buff_size, ret->raw_buff_a);
+    buffer_init(&ret->write_buffer, ret->raw_buff_size, ret->raw_buff_b);
     return ret;
 }
 
@@ -180,6 +243,7 @@ socks5_unref(struct socks5 *s) {
             pool       = s;
             pool_size++;
         } else {
+            socks5_buffers_free(s);
             free(s);
         }
     }
@@ -191,6 +255,7 @@ socksv5_pool_destroy(void) {
     while (s != NULL) {
         next = s->next;
         socks5_resolution_clear(s);
+        socks5_buffers_free(s);
         free(s);
         s = next;
     }

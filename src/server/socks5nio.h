@@ -1,6 +1,9 @@
 #ifndef SOCKS5NIO_H_TPE_SOCKS5
 #define SOCKS5NIO_H_TPE_SOCKS5
 
+#include <stdbool.h>
+#include <stddef.h>
+
 #include "selector.h"
 #include "request.h"   /* REQUEST_REPLY_IPV4_LEN / REQUEST_REPLY_IPV6_LEN */
 
@@ -25,6 +28,20 @@
 #if IO_BUFFER_SIZE < REQUEST_REPLY_IPV6_LEN
 #error "IO_BUFFER_SIZE debe ser >= REQUEST_REPLY_IPV6_LEN (22)"
 #endif
+
+#define IO_BUFFER_SIZE_MIN REQUEST_REPLY_IPV6_LEN
+#define IO_BUFFER_SIZE_MAX (1024 * 1024)
+
+/** tamaño vigente para buffers de nuevas conexiones SOCKS5 */
+size_t
+socksv5_buffer_size(void);
+
+/**
+ * Cambia el tamaño para conexiones nuevas. No redimensiona conexiones activas.
+ * Devuelve false si está fuera de [IO_BUFFER_SIZE_MIN, IO_BUFFER_SIZE_MAX].
+ */
+bool
+socksv5_buffer_size_set(size_t size);
 
 /** handler del socket pasivo SOCKS: acepta la conexión y arranca la stm */
 void

@@ -118,8 +118,9 @@ struct socks5 {
     struct addrinfo        *origin_resolution;
     struct addrinfo        *current_resolution;
 
-    uint8_t                 raw_buff_a[IO_BUFFER_SIZE];
-    uint8_t                 raw_buff_b[IO_BUFFER_SIZE];
+    uint8_t                *raw_buff_a;
+    uint8_t                *raw_buff_b;
+    size_t                  raw_buff_size;
     buffer                  read_buffer;
     buffer                  write_buffer;
 

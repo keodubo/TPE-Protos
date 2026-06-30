@@ -269,11 +269,16 @@ main(void) {
         for (int i = 0; i < 2; i++) { set_nonblock(cli[i]); set_nonblock(ori[i]); }
 
         struct socks5 s5;
+        uint8_t raw_a[IO_BUFFER_SIZE];
+        uint8_t raw_b[IO_BUFFER_SIZE];
         memset(&s5, 0, sizeof(s5));
         s5.client_fd = cli[0];
         s5.origin_fd = ori[0];
-        buffer_init(&s5.read_buffer,  IO_BUFFER_SIZE, s5.raw_buff_a);
-        buffer_init(&s5.write_buffer, IO_BUFFER_SIZE, s5.raw_buff_b);
+        s5.raw_buff_a = raw_a;
+        s5.raw_buff_b = raw_b;
+        s5.raw_buff_size = IO_BUFFER_SIZE;
+        buffer_init(&s5.read_buffer,  s5.raw_buff_size, s5.raw_buff_a);
+        buffer_init(&s5.write_buffer, s5.raw_buff_size, s5.raw_buff_b);
 
         selector_register(s, cli[0], &OBS_HANDLER, OP_NOOP, &s5);
         selector_register(s, ori[0], &OBS_HANDLER, OP_NOOP, &s5);
@@ -311,11 +316,16 @@ main(void) {
         for (int i = 0; i < 2; i++) { set_nonblock(cli[i]); set_nonblock(ori[i]); }
 
         struct socks5 s5;
+        uint8_t raw_a[IO_BUFFER_SIZE];
+        uint8_t raw_b[IO_BUFFER_SIZE];
         memset(&s5, 0, sizeof(s5));
         s5.client_fd = cli[0];
         s5.origin_fd = ori[0];
-        buffer_init(&s5.read_buffer,  IO_BUFFER_SIZE, s5.raw_buff_a);
-        buffer_init(&s5.write_buffer, IO_BUFFER_SIZE, s5.raw_buff_b);
+        s5.raw_buff_a = raw_a;
+        s5.raw_buff_b = raw_b;
+        s5.raw_buff_size = IO_BUFFER_SIZE;
+        buffer_init(&s5.read_buffer,  s5.raw_buff_size, s5.raw_buff_a);
+        buffer_init(&s5.write_buffer, s5.raw_buff_size, s5.raw_buff_b);
 
         selector_register(s, cli[0], &OBS_HANDLER, OP_NOOP, &s5);
         selector_register(s, ori[0], &OBS_HANDLER, OP_NOOP, &s5);
@@ -351,11 +361,16 @@ main(void) {
         for (int i = 0; i < 2; i++) { set_nonblock(cli[i]); set_nonblock(ori[i]); }
 
         struct socks5 s5;
+        uint8_t raw_a[IO_BUFFER_SIZE];
+        uint8_t raw_b[IO_BUFFER_SIZE];
         memset(&s5, 0, sizeof(s5));
         s5.client_fd = cli[0];
         s5.origin_fd = ori[0];
-        buffer_init(&s5.read_buffer,  IO_BUFFER_SIZE, s5.raw_buff_a);
-        buffer_init(&s5.write_buffer, IO_BUFFER_SIZE, s5.raw_buff_b);
+        s5.raw_buff_a = raw_a;
+        s5.raw_buff_b = raw_b;
+        s5.raw_buff_size = IO_BUFFER_SIZE;
+        buffer_init(&s5.read_buffer,  s5.raw_buff_size, s5.raw_buff_a);
+        buffer_init(&s5.write_buffer, s5.raw_buff_size, s5.raw_buff_b);
 
         selector_register(s, cli[0], &OBS_HANDLER, OP_NOOP, &s5);
         selector_register(s, ori[0], &OBS_HANDLER, OP_NOOP, &s5);
