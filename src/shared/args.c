@@ -59,6 +59,7 @@ usage(const char* progname)
             "   -L <conf  addr>  Dirección donde servirá el servicio de management.\n"
             "   -p <SOCKS port>  Puerto entrante conexiones SOCKS.\n"
             "   -P <conf port>   Puerto entrante conexiones configuracion\n"
+            "   --admin <name>:<pass> Credencial de administrador PMC.\n"
             "   -u <name>:<pass> Usuario y contraseña de usuario que puede usar el proxy. Hasta 10.\n"
             "   -v               Imprime información sobre la versión versión y termina.\n"
 
@@ -77,6 +78,8 @@ parse_args(const int argc, char** argv, struct socks5args* args)
 
     args->mng_addr = "127.0.0.1";
     args->mng_port = 8080;
+    args->mng_user = "admin";
+    args->mng_pass = "s3cr3t";
 
     args->disectors_enabled = true;
 
@@ -87,6 +90,7 @@ parse_args(const int argc, char** argv, struct socks5args* args)
     {
         int option_index = 0;
         static struct option long_options[] = {
+            {"admin", required_argument, 0, 1000},
             {0, 0, 0, 0}
         };
 
@@ -96,6 +100,14 @@ parse_args(const int argc, char** argv, struct socks5args* args)
 
         switch (c)
         {
+        case 1000:
+        {
+            struct users admin;
+            user(optarg, &admin);
+            args->mng_user = admin.name;
+            args->mng_pass = admin.pass;
+            break;
+        }
         case 'h':
             usage(argv[0]);
             break;

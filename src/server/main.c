@@ -122,6 +122,7 @@ main(const int argc, char **argv) {
     parse_args(argc, argv, &args);
     metrics_init();
     logger_init(NULL);
+    mgmt_init(args.mng_user, args.mng_pass);
 
     // cargar la tabla de usuarios del proxy (RFC1929) desde los -u name:pass
     for (int i = 0; i < MAX_USERS && args.users[i].name != NULL; i++) {
