@@ -8,8 +8,8 @@ cd "$(dirname "$0")/.."
 BUILD_LOG="/tmp/m7_build_${SOCKS_PORT}.log"
 SRV_LOG="/tmp/m7_srv_${SOCKS_PORT}.log"
 
-echo "== build server =="
-make server >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1; }
+echo "== build server/client =="
+make server client >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1; }
 
 : >"$SRV_LOG"
 ./bin/server -p "$SOCKS_PORT" -P "$MGMT_PORT" --admin root:toor -u user:pass >"$SRV_LOG" 2>&1 &
@@ -23,6 +23,7 @@ trap cleanup EXIT
 
 python3 - "$SOCKS_PORT" "$MGMT_PORT" <<'PY'
 import socket
+import subprocess
 import sys
 import time
 
@@ -98,6 +99,19 @@ def socks_auth(user, password):
         return method, auth
     finally:
         s.close()
+
+
+def client_cmd(*args, expect_ok=True):
+    cmd = ["./bin/client", "-L", "127.0.0.1", "-P", str(mgmt_port),
+           "--admin", "root:toor", *args]
+    cp = subprocess.run(cmd, text=True, capture_output=True, timeout=3)
+    if expect_ok:
+        check(cp.returncode == 0, f"CLI {' '.join(args)} exit 0",
+              (cp.returncode, cp.stdout, cp.stderr))
+    else:
+        check(cp.returncode != 0, f"CLI {' '.join(args)} exit != 0",
+              (cp.returncode, cp.stdout, cp.stderr))
+    return cp
 
 
 got = mgmt_exchange(b"HELLO 1\r\nAUTH root toor\r\n",
@@ -217,6 +231,36 @@ got = mgmt_exchange(
 )
 check(got == [b"+OK 1\r\n", b"+OK\r\n", b"-ERR bad value\r\n", b"-ERR bad value\r\n"],
       "Q: SET-CONFIG buffer-size valida rango y numero", got)
+
+cp = client_cmd("add-user", "cliuser", "clipass")
+check("+OK" in cp.stdout, "R: CLI add-user imprime +OK", cp.stdout)
+method, auth = socks_auth("cliuser", "clipass")
+check(method == b"\x05\x02" and auth == b"\x01\x00",
+      "R: usuario creado por CLI autentica por SOCKS", (method, auth))
+
+cp = client_cmd("list-users")
+check("cliuser" in cp.stdout, "S: CLI list-users imprime usuario", cp.stdout)
+
+cp = client_cmd("metrics")
+check("historic-connections" in cp.stdout and "bytes-transferred" in cp.stdout,
+      "T: CLI metrics imprime metricas", cp.stdout)
+
+cp = client_cmd("set-config", "buffer-size", "32768")
+check("+OK" in cp.stdout, "U: CLI set-config imprime +OK", cp.stdout)
+cp = client_cmd("get-config", "buffer-size")
+check("32768" in cp.stdout, "U: CLI get-config imprime nuevo valor", cp.stdout)
+
+cp = client_cmd("del-user", "cliuser")
+check("+OK" in cp.stdout, "V: CLI del-user imprime +OK", cp.stdout)
+method, auth = socks_auth("cliuser", "clipass")
+check(method == b"\x05\x02" and auth == b"\x01\x01",
+      "V: usuario eliminado por CLI deja de autenticar", (method, auth))
+
+bad = ["./bin/client", "-L", "127.0.0.1", "-P", str(mgmt_port),
+       "--admin", "root:wrong", "metrics"]
+cp = subprocess.run(bad, text=True, capture_output=True, timeout=3)
+check(cp.returncode != 0 and "auth failed" in (cp.stdout + cp.stderr),
+      "W: CLI devuelve exit != 0 en -ERR", (cp.returncode, cp.stdout, cp.stderr))
 
 print(f"== RESULTADO M7: {checks - failures} ok, {failures} fallas ==")
 sys.exit(0 if failures == 0 else 1)
