@@ -1,15 +1,16 @@
 /*
  * mgmt.c - Protocolo de Monitoreo y Configuracion (PMC).
  *
- * M7 handshake: listener no bloqueante, STM propia, parser de lineas CRLF y
- * autenticacion de administrador. Los comandos post-auth se agregan en el
- * siguiente corte.
+ * M7: listener no bloqueante, STM propia, parser de lineas CRLF,
+ * autenticacion de administrador y comandos PMC del servidor.
  */
 #include "mgmt.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -17,13 +18,17 @@
 
 #include "buffer.h"
 #include "dbg.h"
+#include "metrics.h"
 #include "selector.h"
 #include "socks5.h"   /* MSG_NOSIGNAL portable */
 #include "stm.h"
+#include "users.h"
 
-#define MGMT_BUFFER_SIZE 1024
+#define MGMT_BUFFER_SIZE 4096
 #define MGMT_LINE_MAX    512
 #define MGMT_LINE_TEXT_MAX (MGMT_LINE_MAX - 2)
+#define MGMT_NAME_MAX    64
+#define MGMT_VALUE_MAX   255
 
 enum mgmt_state {
     MGMT_GREETING = 0,
@@ -138,6 +143,21 @@ mgmt_queue(struct mgmt_conn *conn, const char *response) {
     return true;
 }
 
+static bool
+mgmt_queuef(struct mgmt_conn *conn, const char *fmt, ...) {
+    char line[MGMT_LINE_MAX + 64];
+    va_list args;
+
+    va_start(args, fmt);
+    const int n = vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+
+    if (n < 0 || (size_t) n >= sizeof(line)) {
+        return false;
+    }
+    return mgmt_queue(conn, line);
+}
+
 static void
 mgmt_set_response(struct mgmt_conn *conn,
                   const char *response,
@@ -170,6 +190,114 @@ mgmt_split(char *line, char *argv[], const int max_args) {
         }
     }
     return argc;
+}
+
+static bool
+mgmt_is_name(const char *s) {
+    if (s == NULL) {
+        return false;
+    }
+    const size_t len = strlen(s);
+    if (len == 0 || len > MGMT_NAME_MAX) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        const char c = s[i];
+        const bool ok = (c >= 'A' && c <= 'Z')
+                     || (c >= 'a' && c <= 'z')
+                     || (c >= '0' && c <= '9')
+                     || c == '_' || c == '-';
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool
+mgmt_is_value(const char *s) {
+    if (s == NULL) {
+        return false;
+    }
+    const size_t len = strlen(s);
+    if (len == 0 || len > MGMT_VALUE_MAX) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        const unsigned char c = (unsigned char) s[i];
+        if (c < 0x21 || c > 0x7E) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static enum mgmt_state
+mgmt_cmd_add_user(struct mgmt_conn *conn, char *name, char *pass) {
+    if (!mgmt_is_name(name) || !mgmt_is_value(pass)) {
+        mgmt_set_response(conn, "-ERR bad name\r\n", MGMT_REQUEST);
+    } else if (users_exists(name)) {
+        mgmt_set_response(conn, "-ERR user exists\r\n", MGMT_REQUEST);
+    } else if (users_count() >= USERS_MAX) {
+        mgmt_set_response(conn, "-ERR limit reached\r\n", MGMT_REQUEST);
+    } else if (users_add(name, pass)) {
+        mgmt_set_response(conn, "+OK\r\n", MGMT_REQUEST);
+    } else {
+        mgmt_set_response(conn, "-ERR bad name\r\n", MGMT_REQUEST);
+    }
+    return MGMT_REQUEST;
+}
+
+static enum mgmt_state
+mgmt_cmd_del_user(struct mgmt_conn *conn, char *name) {
+    if (!mgmt_is_name(name)) {
+        mgmt_set_response(conn, "-ERR bad name\r\n", MGMT_REQUEST);
+    } else if (users_remove(name)) {
+        mgmt_set_response(conn, "+OK\r\n", MGMT_REQUEST);
+    } else {
+        mgmt_set_response(conn, "-ERR no such user\r\n", MGMT_REQUEST);
+    }
+    return MGMT_REQUEST;
+}
+
+static enum mgmt_state
+mgmt_cmd_list_users(struct mgmt_conn *conn) {
+    const size_t n = users_count();
+    if (!mgmt_queuef(conn, "+OK %zu\r\n", n)) {
+        conn->after_write = MGMT_ERROR;
+        return MGMT_REQUEST;
+    }
+    for (size_t i = 0; i < n; i++) {
+        const char *name = users_name_at(i);
+        if (name == NULL || !mgmt_queuef(conn, "%s\r\n", name)) {
+            conn->after_write = MGMT_ERROR;
+            return MGMT_REQUEST;
+        }
+    }
+    conn->after_write = MGMT_REQUEST;
+    return MGMT_REQUEST;
+}
+
+static enum mgmt_state
+mgmt_cmd_metrics(struct mgmt_conn *conn) {
+    const struct socks_metrics *m = metrics_get();
+    const unsigned long current_users = (unsigned long) users_count();
+
+    if (!mgmt_queue(conn, "+OK 5\r\n")
+            || !mgmt_queuef(conn, "historic-connections %lu\r\n",
+                            m->historic_connections)
+            || !mgmt_queuef(conn, "concurrent-connections %lu\r\n",
+                            m->current_connections)
+            || !mgmt_queuef(conn, "bytes-transferred %llu\r\n",
+                            m->bytes_transferred)
+            || !mgmt_queuef(conn, "current-users %lu\r\n", current_users)
+            || !mgmt_queuef(conn, "failed-connections %lu\r\n",
+                            m->failed_connections)) {
+        conn->after_write = MGMT_ERROR;
+    } else {
+        conn->after_write = MGMT_REQUEST;
+    }
+    return MGMT_REQUEST;
 }
 
 static enum mgmt_state
@@ -205,6 +333,18 @@ mgmt_handle_line(struct mgmt_conn *conn, const enum mgmt_state current) {
     }
 
     if (current == MGMT_REQUEST) {
+        if (argc == 3 && strcmp(argv[0], "ADD-USER") == 0) {
+            return mgmt_cmd_add_user(conn, argv[1], argv[2]);
+        }
+        if (argc == 2 && strcmp(argv[0], "DEL-USER") == 0) {
+            return mgmt_cmd_del_user(conn, argv[1]);
+        }
+        if (argc == 1 && strcmp(argv[0], "LIST-USERS") == 0) {
+            return mgmt_cmd_list_users(conn);
+        }
+        if (argc == 1 && strcmp(argv[0], "METRICS") == 0) {
+            return mgmt_cmd_metrics(conn);
+        }
         if (argc == 1 && strcmp(argv[0], "QUIT") == 0) {
             mgmt_set_response(conn, "+OK bye\r\n", MGMT_DONE);
         } else {

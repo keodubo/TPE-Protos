@@ -26,6 +26,12 @@ void users_reset(void);
  */
 bool users_add(const char *name, const char *pass);
 
+/** true si existe un usuario con ese nombre exacto */
+bool users_exists(const char *name);
+
+/** elimina por nombre exacto. Devuelve false si no existe. */
+bool users_remove(const char *name);
+
 /**
  * true si (name, pass) coincide EXACTO (byte a byte, case-sensitive) con un
  * usuario cargado. Credenciales vacías => false (D7.7).
@@ -41,5 +47,11 @@ bool users_validate_len(const char *name, size_t name_len,
 
 /** cantidad de usuarios cargados */
 size_t users_count(void);
+
+/**
+ * Nombre del usuario en la posición ordinal de la tabla compactada de usuarios
+ * usados. Devuelve NULL si index >= users_count().
+ */
+const char *users_name_at(size_t index);
 
 #endif

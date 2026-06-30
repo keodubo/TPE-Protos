@@ -81,6 +81,40 @@ users_add(const char *name, const char *pass) {
 }
 
 bool
+users_exists(const char *name) {
+    size_t name_len = 0;
+    if (!valid_field(name, &name_len)) {
+        return false;
+    }
+    for (size_t i = 0; i < USERS_MAX; i++) {
+        if (table[i].used
+                && table[i].name_len == name_len
+                && memcmp(table[i].name, name, name_len) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+users_remove(const char *name) {
+    size_t name_len = 0;
+    if (!valid_field(name, &name_len)) {
+        return false;
+    }
+    for (size_t i = 0; i < USERS_MAX; i++) {
+        if (table[i].used
+                && table[i].name_len == name_len
+                && memcmp(table[i].name, name, name_len) == 0) {
+            memset(&table[i], 0, sizeof(table[i]));
+            count--;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
 users_validate(const char *name, const char *pass) {
     if (name == NULL || pass == NULL) {
         return false;
@@ -109,4 +143,19 @@ users_validate_len(const char *name, const size_t name_len,
 size_t
 users_count(void) {
     return count;
+}
+
+const char *
+users_name_at(const size_t index) {
+    size_t seen = 0;
+    for (size_t i = 0; i < USERS_MAX; i++) {
+        if (!table[i].used) {
+            continue;
+        }
+        if (seen == index) {
+            return table[i].name;
+        }
+        seen++;
+    }
+    return NULL;
 }

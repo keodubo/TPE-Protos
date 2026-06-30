@@ -85,6 +85,21 @@ def mgmt_exchange(payload, expected_lines):
         s.close()
 
 
+def socks_auth(user, password):
+    s = socket.create_connection(("127.0.0.1", socks_port), timeout=2)
+    s.settimeout(2)
+    try:
+        s.sendall(b"\x05\x01\x02")
+        method = s.recv(2)
+        u = user.encode("ascii")
+        p = password.encode("ascii")
+        s.sendall(b"\x01" + bytes([len(u)]) + u + bytes([len(p)]) + p)
+        auth = s.recv(2)
+        return method, auth
+    finally:
+        s.close()
+
+
 got = mgmt_exchange(b"HELLO 1\r\nAUTH root toor\r\n",
                     [b"+OK 1\r\n", b"+OK\r\n"])
 check(got == [b"+OK 1\r\n", b"+OK\r\n"],
@@ -102,6 +117,78 @@ check(got == [b"+OK 1\r\n", b"-ERR auth failed\r\n"],
 got = mgmt_exchange(b"METRICS\r\n", [b"-ERR not authenticated\r\n"])
 check(got == [b"-ERR not authenticated\r\n"],
       "E: comando antes de auth -> -ERR not authenticated", got)
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nADD-USER pablito pass1234\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"+OK\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"+OK\r\n"],
+      "F: ADD-USER agrega usuario en runtime", got)
+
+method, auth = socks_auth("pablito", "pass1234")
+check(method == b"\x05\x02" and auth == b"\x01\x00",
+      "F: usuario agregado autentica por SOCKS sin reiniciar", (method, auth))
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nADD-USER pablito otra\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"-ERR user exists\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"-ERR user exists\r\n"],
+      "G: ADD-USER duplicado -> -ERR user exists", got)
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nLIST-USERS\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"+OK 2\r\n", b"user\r\n", b"pablito\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"+OK 2\r\n", b"user\r\n", b"pablito\r\n"],
+      "H: LIST-USERS devuelve count-prefix y nombres", got)
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nMETRICS\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"+OK 5\r\n", b"", b"", b"", b"", b""],
+)
+metric_keys = [line.split(b" ", 1)[0] for line in got[3:]]
+check(got[:3] == [b"+OK 1\r\n", b"+OK\r\n", b"+OK 5\r\n"]
+      and metric_keys == [
+          b"historic-connections",
+          b"concurrent-connections",
+          b"bytes-transferred",
+          b"current-users",
+          b"failed-connections",
+      ],
+      "I: METRICS devuelve metricas con count-prefix", got)
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nDEL-USER pablito\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"+OK\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"+OK\r\n"],
+      "J: DEL-USER elimina usuario en runtime", got)
+
+method, auth = socks_auth("pablito", "pass1234")
+check(method == b"\x05\x02" and auth == b"\x01\x01",
+      "J: usuario eliminado deja de autenticar por SOCKS", (method, auth))
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nDEL-USER nadie\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"-ERR no such user\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"-ERR no such user\r\n"],
+      "K: DEL-USER inexistente -> -ERR no such user", got)
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nADD-USER mal.nombre pass\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"-ERR bad name\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"-ERR bad name\r\n"],
+      "L: ADD-USER valida name PMC", got)
+
+got = mgmt_exchange(
+    b"HELLO 1\r\nAUTH root toor\r\nQUIT\r\n",
+    [b"+OK 1\r\n", b"+OK\r\n", b"+OK bye\r\n"],
+)
+check(got == [b"+OK 1\r\n", b"+OK\r\n", b"+OK bye\r\n"],
+      "M: QUIT responde bye", got)
 
 print(f"== RESULTADO M7: {checks - failures} ok, {failures} fallas ==")
 sys.exit(0 if failures == 0 else 1)

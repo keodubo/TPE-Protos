@@ -4,6 +4,7 @@
  */
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 #include "users.h"
 
 static int checks = 0, failures = 0;
@@ -72,6 +73,24 @@ int main(void) {
     CHECK(!users_add("u", NULL),      "7: add(u, NULL) -> false");
     CHECK(!users_validate(NULL, "p"), "7: validate(NULL, p) -> false");
     CHECK(!users_validate("u", NULL), "7: validate(u, NULL) -> false");
+
+    /* --- 8: operaciones runtime para PMC --- */
+    users_reset();
+    users_add("uno", "p1");
+    users_add("dos", "p2");
+    CHECK(users_exists("uno"), "8: exists encuentra usuario");
+    CHECK(!users_exists("tres"), "8: exists rechaza inexistente");
+    CHECK(users_name_at(0) != NULL && strcmp(users_name_at(0), "uno") == 0,
+          "8: name_at primer usuario");
+    CHECK(users_name_at(1) != NULL && strcmp(users_name_at(1), "dos") == 0,
+          "8: name_at segundo usuario");
+    CHECK(users_name_at(2) == NULL, "8: name_at fuera de rango");
+    CHECK(users_remove("uno"), "8: remove existente");
+    CHECK(!users_validate("uno", "p1"), "8: remove invalida credencial");
+    CHECK(users_count() == 1, "8: remove decrementa count");
+    CHECK(users_name_at(0) != NULL && strcmp(users_name_at(0), "dos") == 0,
+          "8: name_at compacta slots usados");
+    CHECK(!users_remove("uno"), "8: remove inexistente");
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
