@@ -36,6 +36,8 @@
 set -u
 PORT="${1:-11090}"
 cd "$(dirname "$0")/.."
+# shellcheck source=integration_lib.sh
+. "$(dirname "$0")/integration_lib.sh"
 
 skip_if_missing="${SKIP_VALGRIND_IF_MISSING:-0}"
 if ! command -v valgrind >/dev/null 2>&1; then
@@ -56,9 +58,11 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 echo "===== build ====="
-make server >/tmp/vgt_build.log 2>&1 || { echo "BUILD FALLA ❌"; cat /tmp/vgt_build.log; exit 1; }
+BUILD_LOG="$(tpe_mktemp vgt_build)"
+SRV_LOG="$(tpe_mktemp vgt_srv)"
+VGLOG="$(tpe_mktemp vg_traffic)"
+make server >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA ❌"; cat "$BUILD_LOG"; exit 1; }
 
-VGLOG="/tmp/tpe_vg_traffic.log"; rm -f "$VGLOG"
 echo "===== valgrind + tráfico M3 (proxy en 127.0.0.1:$PORT) ====="
 
 # Arch (pampero) stripea ld.so -> valgrind baja símbolos por debuginfod (sin root).
@@ -67,10 +71,15 @@ valgrind --leak-check=full --show-leak-kinds=all \
   --errors-for-leak-kinds=definite,indirect \
   --error-exitcode=99 --track-fds=yes --num-callers=20 \
   --log-file="$VGLOG" \
-  ./bin/server -p "$PORT" -u user:pass >/tmp/vgt_srv.log 2>&1 &
+  ./bin/server -p "$PORT" -u user:pass >"$SRV_LOG" 2>&1 &
 VG=$!
 
-cleanup() { kill -TERM "$VG" 2>/dev/null; sleep 0.2; kill -9 "$VG" 2>/dev/null; }
+cleanup() {
+  kill -TERM "$VG" 2>/dev/null
+  sleep 0.2
+  kill -9 "$VG" 2>/dev/null
+  rm -f "$BUILD_LOG" "$SRV_LOG" "$VGLOG"
+}
 trap cleanup EXIT
 
 # Esperar a que el proxy escuche (valgrind arranca lento).

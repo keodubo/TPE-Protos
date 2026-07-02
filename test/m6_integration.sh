@@ -4,9 +4,10 @@ set -u
 PORT="${1:-11086}"
 MGMT_PORT=$((PORT + 1000))
 cd "$(dirname "$0")/.."
-
-LOG="/tmp/m6_srv_${PORT}.log"
-BUILD_LOG="/tmp/m6_build_${PORT}.log"
+# shellcheck source=integration_lib.sh
+. "$(dirname "$0")/integration_lib.sh"
+LOG="$(tpe_mktemp m6_srv)"
+BUILD_LOG="$(tpe_mktemp m6_build)"
 
 echo "== build server =="
 make server >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1; }
@@ -18,6 +19,7 @@ cleanup() {
     kill -TERM "$SRV" 2>/dev/null
     sleep 0.3
     kill -9 "$SRV" 2>/dev/null
+    rm -f "$LOG" "$BUILD_LOG"
 }
 trap cleanup EXIT
 

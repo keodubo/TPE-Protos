@@ -4,9 +4,10 @@ set -u
 SOCKS_PORT="${1:-11087}"
 MGMT_PORT=$((SOCKS_PORT + 1000))
 cd "$(dirname "$0")/.."
-
-BUILD_LOG="/tmp/m7_build_${SOCKS_PORT}.log"
-SRV_LOG="/tmp/m7_srv_${SOCKS_PORT}.log"
+# shellcheck source=integration_lib.sh
+. "$(dirname "$0")/integration_lib.sh"
+BUILD_LOG="$(tpe_mktemp m7_build)"
+SRV_LOG="$(tpe_mktemp m7_srv)"
 
 echo "== build server/client =="
 make server client >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1; }
@@ -18,6 +19,7 @@ cleanup() {
     kill -TERM "$SRV" 2>/dev/null
     sleep 0.3
     kill -9 "$SRV" 2>/dev/null
+    rm -f "$BUILD_LOG" "$SRV_LOG"
 }
 trap cleanup EXIT
 

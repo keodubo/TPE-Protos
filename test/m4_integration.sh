@@ -4,18 +4,23 @@ set -u
 PORT="${1:-11084}"
 MGMT_PORT=$((PORT + 1000))
 cd "$(dirname "$0")/.."
-
-echo "== build server =="
-make server >/tmp/m4_build.log 2>&1 || { echo "BUILD FALLA"; cat /tmp/m4_build.log; exit 1; }
-
-./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >/tmp/m4_srv.log 2>&1 &
-SRV=$!
+# shellcheck source=integration_lib.sh
+. "$(dirname "$0")/integration_lib.sh"
+BUILD_LOG="$(tpe_mktemp m4_build)"
+SRV_LOG="$(tpe_mktemp m4_srv)"
 cleanup() {
     kill -TERM "$SRV" 2>/dev/null
     sleep 0.3
     kill -9 "$SRV" 2>/dev/null
+    rm -f "$BUILD_LOG" "$SRV_LOG"
 }
 trap cleanup EXIT
+
+echo "== build server =="
+make server >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1; }
+
+./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >"$SRV_LOG" 2>&1 &
+SRV=$!
 
 python3 - "$PORT" <<'PY'
 import socket

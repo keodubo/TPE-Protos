@@ -4,18 +4,25 @@ set -u
 PORT="${1:-11085}"
 MGMT_PORT=$((PORT + 1000))
 cd "$(dirname "$0")/.."
-
-echo "== build server =="
-make server >/tmp/m5_build.log 2>&1 || { echo "BUILD FALLA"; cat /tmp/m5_build.log; exit 1; }
-
-./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >/tmp/m5_srv.log 2>&1 &
-SRV=$!
+# shellcheck source=integration_lib.sh
+. "$(dirname "$0")/integration_lib.sh"
+BUILD_LOG="$(tpe_mktemp m5_build)"
+SRV_LOG="$(tpe_mktemp m5_srv)"
+M5_L_IPV6_LOG="$(tpe_mktemp m5_l_ipv6)"
+M5_L_BAD_LOG="$(tpe_mktemp m5_l_bad)"
 cleanup() {
     kill -TERM "$SRV" 2>/dev/null
     sleep 0.3
     kill -9 "$SRV" 2>/dev/null
+    rm -f "$BUILD_LOG" "$SRV_LOG" "$M5_L_IPV6_LOG" "$M5_L_BAD_LOG"
 }
 trap cleanup EXIT
+
+echo "== build server =="
+make server >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1; }
+
+./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >"$SRV_LOG" 2>&1 &
+SRV=$!
 
 python3 - "$PORT" <<'PY'
 import socket
@@ -293,7 +300,7 @@ f6_check() {
 # D1: -l ::1 escucha en IPv6 loopback (y NO en 0.0.0.0 IPv4).
 D1_PORT=$((PORT + 1))
 D1_MGMT_PORT=$((MGMT_PORT + 1))
-./bin/server -l ::1 -p "$D1_PORT" -P "$D1_MGMT_PORT" -u user:pass >/tmp/m5_l_ipv6.log 2>&1 &
+./bin/server -l ::1 -p "$D1_PORT" -P "$D1_MGMT_PORT" -u user:pass >"$M5_L_IPV6_LOG" 2>&1 &
 D1=$!
 sleep 0.4
 if kill -0 "$D1" 2>/dev/null; then
@@ -322,14 +329,14 @@ fi
 kill -TERM "$D1" 2>/dev/null; wait "$D1" 2>/dev/null
 
 # D2: -l noEsUnaIP debe fallar con exit != 0 y diagnóstico en stderr.
-./bin/server -l noEsUnaIP -p $((PORT + 2)) -P $((MGMT_PORT + 2)) -u user:pass >/tmp/m5_l_bad.log 2>&1
+./bin/server -l noEsUnaIP -p $((PORT + 2)) -P $((MGMT_PORT + 2)) -u user:pass >"$M5_L_BAD_LOG" 2>&1
 D2_RC=$?
 if [ "$D2_RC" -ne 0 ]; then
     f6_check 0 "D2: -l con literal inválido falla con exit != 0 (no cae mudo a 0.0.0.0)"
 else
     f6_check 1 "D2: -l con literal inválido falla con exit != 0"
 fi
-if grep -qi "direcci\|-l\|literal\|IPv4\|IPv6" /tmp/m5_l_bad.log; then
+if grep -qi "direcci\|-l\|literal\|IPv4\|IPv6" "$M5_L_BAD_LOG"; then
     f6_check 0 "D2: -l inválido emite diagnóstico en stderr"
 else
     f6_check 1 "D2: -l inválido emite diagnóstico en stderr"
