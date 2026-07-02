@@ -46,12 +46,12 @@ unsigned resolv_pending_count(void);
 
 #define LISTEN_BACKLOG 20
 
-static volatile sig_atomic_t done = false;
+static volatile sig_atomic_t signal_count = 0;
 
 static void
-sigterm_handler(const int signal) {
+sig_handler(const int signal) {
     (void) signal;
-    done = true;   // async-signal-safe: sólo seteamos la bandera, no logueamos
+    signal_count++;
 }
 
 /**
@@ -135,14 +135,27 @@ main(const int argc, char **argv) {
 
     close(STDIN_FILENO);            // no leemos de stdin
     signal(SIGPIPE, SIG_IGN);       // no morir al escribir sobre un socket roto
-    signal(SIGTERM, sigterm_handler);
-    signal(SIGINT,  sigterm_handler);
 
     const char     *err_msg  = NULL;
     selector_status ss       = SELECTOR_SUCCESS;
     fd_selector     selector = NULL;
     int             socks_fd = -1;
     int             mgmt_fd  = -1;
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sig_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    if (sigaction(SIGTERM, &sa, NULL) < 0) {
+        err_msg = "no se pudo instalar handler para SIGTERM";
+        goto finally;
+    }
+    if (sigaction(SIGINT, &sa, NULL) < 0) {
+        err_msg = "no se pudo instalar handler para SIGINT";
+        goto finally;
+    }
 
     socks_fd = setup_passive_socket(args.socks_addr, args.socks_port, &err_msg);
     if (socks_fd < 0) {
@@ -196,11 +209,37 @@ main(const int argc, char **argv) {
         goto finally;
     }
 
-    while (!done) {
+    bool draining = false;
+    while (true) {
         ss = selector_select(selector);
         if (ss != SELECTOR_SUCCESS) {
             err_msg = "error en el bucle de eventos";
             goto finally;
+        }
+
+        const int sig_count = signal_count;
+        if (sig_count >= 2) {
+            break;
+        }
+
+        if (sig_count == 1 && !draining) {
+            draining = true;
+            if (socks_fd >= 0) {
+                selector_unregister_fd(selector, socks_fd);
+                close(socks_fd);
+                socks_fd = -1;
+            }
+            if (mgmt_fd >= 0) {
+                selector_unregister_fd(selector, mgmt_fd);
+                close(mgmt_fd);
+                mgmt_fd = -1;
+            }
+            fprintf(stdout, "draining: %lu conexiones activas\n", metrics_get()->current_connections);
+            fflush(stdout);
+        }
+
+        if (draining && metrics_get()->current_connections == 0) {
+            break;
         }
     }
     fprintf(stdout, "señal recibida, cerrando...\n");   // log fuera del handler
@@ -254,5 +293,6 @@ finally:
     if (mgmt_fd >= 0) {
         close(mgmt_fd);
     }
+    users_reset();
     return ret;
 }
