@@ -16,12 +16,11 @@ make server client >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG";
 ./bin/server -p "$SOCKS_PORT" -P "$MGMT_PORT" --admin root:toor -u user:pass >"$SRV_LOG" 2>&1 &
 SRV=$!
 cleanup() {
-    kill -TERM "$SRV" 2>/dev/null
-    sleep 0.3
-    kill -9 "$SRV" 2>/dev/null
+    tpe_stop_server "$SRV"
     rm -f "$BUILD_LOG" "$SRV_LOG"
 }
 trap cleanup EXIT
+tpe_wait_server "$SRV" "$SOCKS_PORT" "$SRV_LOG" || exit 1
 
 python3 - "$SOCKS_PORT" "$MGMT_PORT" <<'PY'
 import socket
@@ -169,7 +168,7 @@ check(got[:3] == [b"+OK 1\r\n", b"+OK\r\n", b"+OK 5\r\n"]
           b"historic-connections",
           b"concurrent-connections",
           b"bytes-transferred",
-          b"current-users",
+          b"configured-users",
           b"failed-connections",
       ],
       "I: METRICS devuelve metricas con count-prefix", got)

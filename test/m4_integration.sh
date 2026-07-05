@@ -8,10 +8,9 @@ cd "$(dirname "$0")/.."
 . "$(dirname "$0")/integration_lib.sh"
 BUILD_LOG="$(tpe_mktemp m4_build)"
 SRV_LOG="$(tpe_mktemp m4_srv)"
+SRV=""
 cleanup() {
-    kill -TERM "$SRV" 2>/dev/null
-    sleep 0.3
-    kill -9 "$SRV" 2>/dev/null
+    tpe_stop_server "$SRV"
     rm -f "$BUILD_LOG" "$SRV_LOG"
 }
 trap cleanup EXIT
@@ -21,6 +20,7 @@ make server >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1
 
 ./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >"$SRV_LOG" 2>&1 &
 SRV=$!
+tpe_wait_server "$SRV" "$PORT" "$SRV_LOG" || exit 1
 
 python3 - "$PORT" <<'PY'
 import socket
@@ -178,6 +178,34 @@ try:
           origin.received.hex(), early.hex())
     check(received == reply_data, "B: respuesta al payload temprano llega al cliente",
           received.hex(), reply_data.hex())
+finally:
+    origin.close()
+
+early_half = b"early-half-close-" + bytes(range(96))
+reply_half = b"reply-after-half-close-" + bytes(range(160))
+origin = Origin(early_half, reply_half)
+try:
+    client = socket.create_connection(("127.0.0.1", proxy_port), timeout=3)
+    client.settimeout(3)
+    client.sendall(HELLO + AUTH + make_request(origin.port) + early_half)
+    client.shutdown(socket.SHUT_WR)
+    prefix = recv_exact(client, 14)
+    hello, auth, reply = prefix[:2], prefix[2:4], prefix[4:14]
+    check(hello + auth == b"\x05\x02\x01\x00",
+          "B2: half-close temprano mantiene HELLO/AUTH",
+          (hello + auth).hex(), "05020100")
+    check(len(reply) == 10 and reply[:4] == b"\x05\x00\x00\x01",
+          "B2: half-close durante connect -> REP success",
+          reply.hex(), "05000001 + 6 bytes")
+    received = recv_exact(client, len(reply_half))
+    client.close()
+    origin.done.wait(timeout=3)
+    check(origin.received == early_half,
+          "B2: payload temprano sobrevive al half-close pre-COPY",
+          origin.received.hex(), early_half.hex())
+    check(received == reply_half,
+          "B2: half-close pre-COPY conserva respuesta origin->client",
+          received.hex(), reply_half.hex())
 finally:
     origin.close()
 

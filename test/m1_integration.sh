@@ -9,15 +9,19 @@ cd "$(dirname "$0")/.."
 . "$(dirname "$0")/integration_lib.sh"
 BUILD_LOG="$(tpe_mktemp m1_build)"
 SRV_LOG="$(tpe_mktemp m1_srv)"
-cleanup_logs() { rm -f "$BUILD_LOG" "$SRV_LOG"; }
-trap cleanup_logs EXIT
+SRV=""
+cleanup() {
+    tpe_stop_server "$SRV"
+    rm -f "$BUILD_LOG" "$SRV_LOG"
+}
+trap cleanup EXIT
 
 echo "== build server =="
 make server >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1; }
 
 ./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >"$SRV_LOG" 2>&1 &
 SRV=$!
-sleep 0.5
+tpe_wait_server "$SRV" "$PORT" "$SRV_LOG" || exit 1
 
 PASS=0; FAIL=0
 chk(){ if [ "$1" = "$2" ]; then echo "  ok  - $3"; PASS=$((PASS+1));
@@ -58,6 +62,7 @@ chk "$(resp 040100)"   ""     "F: versión inválida (04 ..)  -> cierra sin resp
 # tras el HELLO es el inicio del sub-handshake usuario/contraseña, no se ignora.
 # Se cubre end-to-end en test/m2_integration.sh (casos C y E).
 
-kill -TERM "$SRV" 2>/dev/null; sleep 0.3; kill -9 "$SRV" 2>/dev/null
+tpe_stop_server "$SRV"
+SRV=""
 echo "== RESULTADO M1: $PASS ok, $FAIL fallas =="
 [ "$FAIL" -eq 0 ]

@@ -53,8 +53,8 @@ S: -ERR auth failed         ; el servidor DEBE cerrar la conexión
 | `QUIT` | `+OK bye` y cierra | — |
 
 ### Métricas mínimas (claves sugeridas)
-`historic-connections`, `concurrent-connections`, `bytes-transferred`
-(ampliar: `current-users`, `failed-connections`, …).
+`historic-connections`, `concurrent-connections`, `bytes-transferred`,
+`configured-users` y `failed-connections`.
 
 ### Claves de configuración sugeridas
 `buffer-size` (bytes de I/O por sentido), `log-level`. (Ampliable.)
@@ -69,6 +69,8 @@ S: +OK 3
 S: historic-connections 1422
 S: concurrent-connections 87
 S: bytes-transferred 9123847
+S: configured-users 4
+S: failed-connections 3
 ```
 
 ## 6. Pipelining

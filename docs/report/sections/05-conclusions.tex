@@ -1,0 +1,11 @@
+\section{Conclusiones}
+
+La arquitectura mantiene el principio central de la consigna: I/O no bloqueante
+multiplexado en un único hilo, con la única excepción de hilos dedicados a DNS.
+La separación entre SOCKS5 y PMC permite administrar usuarios, configuración y
+métricas sin mezclar el plano de datos con el plano de control.
+
+La evidencia local muestra que la suite M1-M7 pasa y que el banco de stress
+produce CSV y gráficos reproducibles. El cierre final de entrega requiere dos
+validaciones externas al smoke local: Valgrind en Linux/Pampero y una corrida de
+stress completa en el entorno de entrega.

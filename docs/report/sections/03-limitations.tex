@@ -1,0 +1,19 @@
+\section{Limitaciones de la aplicación}
+
+El selector actual usa \texttt{pselect} y queda limitado por \texttt{FD\_SETSIZE}.
+Una conexión SOCKS5 establecida consume dos file descriptors principales:
+cliente-proxy y proxy-origen. Por eso el techo real debe medirse en el entorno
+de entrega, no inferirse sólo desde el código.
+
+Las métricas son volátiles: se reinician al reiniciar el servidor. El access-log
+actual se escribe de forma síncrona con \texttt{fprintf}/\texttt{fflush}; para el
+alcance del TP es simple y auditable, pero bajo carga extrema puede introducir
+latencia.
+
+El apagado controlado tiene una decisión explícita: una segunda señal corta el
+drenaje graceful de conexiones activas, pero no destruye el selector ni el pool
+mientras haya resoluciones DNS pendientes. Esto evita use-after-free, al costo de
+esperar si \texttt{getaddrinfo} tarda.
+
+Valgrind/Pampero no fue ejecutado en este host macOS. Debe correrse en Linux
+antes de afirmar que no hay leaks ni file descriptors abiertos.

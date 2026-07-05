@@ -1,0 +1,46 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[spanish,es-tabla]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\geometry{margin=2.5cm}
+\graphicspath{{figures/}{../stress/2026-07-05_local-smoke_v1/}}
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue}
+
+\title{Servidor Proxy SOCKS5 con Protocolo de Monitoreo}
+\author{Grupo: \textit{completar integrantes}}
+\date{Protocolos de Comunicación -- 2026C1}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Se desarrolló un servidor proxy SOCKS5 en C11 con I/O no bloqueante multiplexado,
+autenticación usuario/contraseña, conexión TCP saliente a IPv4, IPv6 y FQDN,
+resolución DNS fuera del hilo del selector, métricas volátiles, registro de
+accesos y un protocolo propio de monitoreo/configuración con cliente CLI. El
+alcance cubre la primera entrega; el monitoreo de credenciales POP3 queda fuera.
+\end{abstract}
+
+\tableofcontents
+\clearpage
+
+\input{sections/01-protocols-apps}
+\input{sections/02-problems}
+\input{sections/03-limitations}
+\input{sections/04-extensions}
+\input{sections/05-conclusions}
+\input{sections/06-test-examples}
+\input{sections/07-installation}
+\input{sections/08-configuration}
+\input{sections/09-mgmt-examples}
+\input{sections/10-design}
+
+\end{document}

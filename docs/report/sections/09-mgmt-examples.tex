@@ -1,0 +1,26 @@
+\section{Ejemplos de configuración y monitoreo}
+
+Ejemplos con el cliente:
+\begin{verbatim}
+./bin/client --admin admin:s3cr3t metrics
+./bin/client --admin admin:s3cr3t add-user pablito pass1234
+./bin/client --admin admin:s3cr3t list-users
+./bin/client --admin admin:s3cr3t get-config buffer-size
+./bin/client --admin admin:s3cr3t set-config buffer-size 32768
+./bin/client --admin admin:s3cr3t del-user pablito
+\end{verbatim}
+
+Ejemplo de sesión cruda PMC:
+\begin{verbatim}
+C: HELLO 1
+S: +OK 1
+C: AUTH admin s3cr3t
+S: +OK
+C: METRICS
+S: +OK 5
+S: historic-connections 10
+S: concurrent-connections 0
+S: bytes-transferred 123456
+S: configured-users 2
+S: failed-connections 1
+\end{verbatim}

@@ -10,10 +10,9 @@ BUILD_LOG="$(tpe_mktemp m5_build)"
 SRV_LOG="$(tpe_mktemp m5_srv)"
 M5_L_IPV6_LOG="$(tpe_mktemp m5_l_ipv6)"
 M5_L_BAD_LOG="$(tpe_mktemp m5_l_bad)"
+SRV=""
 cleanup() {
-    kill -TERM "$SRV" 2>/dev/null
-    sleep 0.3
-    kill -9 "$SRV" 2>/dev/null
+    tpe_stop_server "$SRV"
     rm -f "$BUILD_LOG" "$SRV_LOG" "$M5_L_IPV6_LOG" "$M5_L_BAD_LOG"
 }
 trap cleanup EXIT
@@ -23,6 +22,7 @@ make server >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1
 
 ./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >"$SRV_LOG" 2>&1 &
 SRV=$!
+tpe_wait_server "$SRV" "$PORT" "$SRV_LOG" || exit 1
 
 python3 - "$PORT" <<'PY'
 import socket

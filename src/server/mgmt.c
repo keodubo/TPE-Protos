@@ -290,7 +290,7 @@ mgmt_cmd_metrics(struct mgmt_conn *conn) {
                             m->current_connections)
             || !mgmt_queuef(conn, "bytes-transferred %llu\r\n",
                             m->bytes_transferred)
-            || !mgmt_queuef(conn, "current-users %lu\r\n", current_users)
+            || !mgmt_queuef(conn, "configured-users %lu\r\n", current_users)
             || !mgmt_queuef(conn, "failed-connections %lu\r\n",
                             m->failed_connections)) {
         conn->after_write = MGMT_ERROR;

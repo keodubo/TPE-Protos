@@ -4,11 +4,20 @@ bin/
 *.o
 *.a
 *.dSYM/
+__pycache__/
+*.pyc
+*.aux
+*.out
+*.toc
+docs/report/*.log
 
 # === Extras ===
 tmp/
-extras/
+/extras/
 scripts/
+/docs/extras
+/docs/stress
+
 
 # === macOS ===
 .DS_Store

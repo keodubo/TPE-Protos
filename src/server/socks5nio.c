@@ -916,7 +916,14 @@ request_connecting_read(struct selector_key *key) {
         return REQUEST_CONNECTING;
     }
     if (n == 0) {
-        return DONE;
+        /*
+         * El cliente puede hacer half-close mientras el connect al origin sigue
+         * pendiente. No cerramos la conexión: si ya había payload temprano en
+         * read_buffer, COPY debe drenarlo al origin y recién entonces propagar el
+         * half-close con shutdown(SHUT_WR).
+         */
+        return client_set_interest(key, OP_NOOP) == SELECTOR_SUCCESS
+             ? REQUEST_CONNECTING : ERROR;
     }
     if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
         return REQUEST_CONNECTING;

@@ -54,6 +54,24 @@ sig_handler(const int signal) {
     signal_count++;
 }
 
+static void
+close_passive_fd(fd_selector selector, int *fd) {
+    if (fd == NULL || *fd < 0) {
+        return;
+    }
+    if (selector != NULL) {
+        (void) selector_unregister_fd(selector, *fd);
+    }
+    close(*fd);
+    *fd = -1;
+}
+
+static void
+close_passives(fd_selector selector, int *socks_fd, int *mgmt_fd) {
+    close_passive_fd(selector, socks_fd);
+    close_passive_fd(selector, mgmt_fd);
+}
+
 /**
  * crea, bindea y pone a escuchar un socket pasivo TCP no bloqueante.
  *
@@ -219,21 +237,13 @@ main(const int argc, char **argv) {
 
         const int sig_count = signal_count;
         if (sig_count >= 2) {
+            close_passives(selector, &socks_fd, &mgmt_fd);
             break;
         }
 
         if (sig_count == 1 && !draining) {
             draining = true;
-            if (socks_fd >= 0) {
-                selector_unregister_fd(selector, socks_fd);
-                close(socks_fd);
-                socks_fd = -1;
-            }
-            if (mgmt_fd >= 0) {
-                selector_unregister_fd(selector, mgmt_fd);
-                close(mgmt_fd);
-                mgmt_fd = -1;
-            }
+            close_passives(selector, &socks_fd, &mgmt_fd);
             fprintf(stdout, "draining: %lu conexiones activas\n", metrics_get()->current_connections);
             fflush(stdout);
         }

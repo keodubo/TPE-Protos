@@ -16,12 +16,11 @@ make server >"$BUILD_LOG" 2>&1 || { echo "BUILD FALLA"; cat "$BUILD_LOG"; exit 1
 ./bin/server -p "$PORT" -P "$MGMT_PORT" -u user:pass >"$LOG" 2>&1 &
 SRV=$!
 cleanup() {
-    kill -TERM "$SRV" 2>/dev/null
-    sleep 0.3
-    kill -9 "$SRV" 2>/dev/null
+    tpe_stop_server "$SRV"
     rm -f "$LOG" "$BUILD_LOG"
 }
 trap cleanup EXIT
+tpe_wait_server "$SRV" "$PORT" "$LOG" || exit 1
 
 python3 - "$PORT" <<'PY'
 import socket

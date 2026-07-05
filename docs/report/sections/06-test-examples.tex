@@ -1,0 +1,36 @@
+\section{Ejemplos de prueba}
+
+\begin{longtable}{p{0.35\linewidth}p{0.2\linewidth}p{0.35\linewidth}}
+\toprule
+\textbf{Comando} & \textbf{Estado} & \textbf{Observación} \\
+\midrule
+\texttt{make clean \&\& make} & Verificado local & Compila server y client. \\
+\texttt{make check} & Verificado local & Unitarios e integración M1-M7. \\
+\texttt{test/m4\_integration.sh} & Verificado local & Incluye payload temprano con half-close pre-COPY. \\
+\texttt{make valgrind PORT=...} & Pendiente & Debe correrse en Linux/Pampero. \\
+\texttt{test/stress/run\_stress.py} & Smoke local & Generó CSV y figuras bajo macOS. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Smoke local de stress}
+
+La corrida local se guardó en:
+\begin{center}
+\texttt{docs/stress/2026-07-05\_local-smoke\_v1/}
+\end{center}
+
+\IfFileExists{../stress/2026-07-05_local-smoke_v1/2026-07-05_fig-throughput-vs-concurrency_v1.png}{
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.82\linewidth]{2026-07-05_fig-throughput-vs-concurrency_v1.png}
+  \caption{Throughput agregado en el smoke local. No reemplaza la corrida Pampero.}
+\end{figure}
+}{}
+
+\IfFileExists{../stress/2026-07-05_local-smoke_v1/2026-07-05_fig-error-rate-vs-concurrency_v1.png}{
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.82\linewidth]{2026-07-05_fig-error-rate-vs-concurrency_v1.png}
+  \caption{Tasa de error en el smoke local.}
+\end{figure}
+}{}

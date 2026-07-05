@@ -1,0 +1,34 @@
+\section{Descripción de protocolos y aplicaciones}
+
+El proyecto entrega dos ejecutables principales. \texttt{bin/server} implementa
+el proxy SOCKS5 y el socket de monitoreo/configuración. \texttt{bin/client}
+implementa una aplicación de terminal para hablar el protocolo de monitoreo sin
+usar \texttt{netcat}.
+
+\subsection{SOCKS5}
+
+El servidor implementa el flujo de SOCKS5 definido por RFC1928 y RFC1929:
+\begin{enumerate}[nosep]
+  \item negociación de método \texttt{HELLO};
+  \item autenticación usuario/contraseña;
+  \item \texttt{REQUEST CONNECT};
+  \item resolución DNS si el destino es FQDN;
+  \item conexión TCP no bloqueante al origen;
+  \item relay bidireccional transparente entre cliente y origen.
+\end{enumerate}
+
+Se soportan destinos IPv4, IPv6 y FQDN. Cuando \texttt{getaddrinfo} devuelve más
+de una dirección, el proxy reintenta con la siguiente dirección si el primer
+\texttt{connect} falla.
+
+\subsection{Protocolo de monitoreo}
+
+El Protocolo de Monitoreo y Configuración (PMC) usa TCP en un socket separado
+del proxy SOCKS5. Es textual, orientado a líneas \texttt{CRLF}, y usa respuestas
+\texttt{+OK}/\texttt{-ERR}. El cliente inicia con \texttt{HELLO 1}, luego
+autentica con \texttt{AUTH <admin-user> <admin-pass>}.
+
+Los comandos implementados son \texttt{ADD-USER}, \texttt{DEL-USER},
+\texttt{LIST-USERS}, \texttt{METRICS}, \texttt{GET-CONFIG},
+\texttt{SET-CONFIG} y \texttt{QUIT}. Las respuestas multi-línea usan prefijo de
+cantidad para que el cliente sepa cuántas líneas leer.

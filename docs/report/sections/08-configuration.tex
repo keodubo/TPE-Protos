@@ -1,0 +1,17 @@
+\section{Instrucciones para la configuración}
+
+Opciones principales del servidor:
+\begin{verbatim}
+./bin/server [OPCIONES]
+  -l <addr>        direccion SOCKS, default 0.0.0.0
+  -p <port>        puerto SOCKS, default 1080
+  -L <addr>        direccion PMC, default 127.0.0.1
+  -P <port>        puerto PMC, default 8080
+  -u <name>:<pass> usuario SOCKS5
+  --admin u:p      credencial de administracion PMC
+  -N               desactiva disectores
+  -h / -v          ayuda / version
+\end{verbatim}
+
+El tamaño de buffer se puede consultar y cambiar para conexiones nuevas mediante
+el PMC con \texttt{GET-CONFIG buffer-size} y \texttt{SET-CONFIG buffer-size N}.

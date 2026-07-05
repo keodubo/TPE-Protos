@@ -1,0 +1,29 @@
+\section{Documento de diseño del proyecto}
+
+El servidor usa tres piezas centrales del toolkit: \texttt{selector},
+\texttt{stm} y \texttt{buffer}. El selector concentra los eventos de sockets; la
+máquina de estados separa cada fase del protocolo; los buffers resuelven
+lecturas y escrituras parciales.
+
+\subsection{Estados SOCKS5}
+
+\begin{center}
+\texttt{HELLO -> AUTH -> REQUEST -> RESOLV? -> CONNECTING -> REQUEST\_WRITE -> COPY -> DONE}
+\end{center}
+
+\texttt{COPY} mantiene dos direcciones de relay: cliente a origen y origen a
+cliente. Cada dirección tiene su estado de lectura/escritura; al recibir EOF en
+un sentido se drena lo pendiente y se propaga \texttt{shutdown(SHUT\_WR)} al par.
+
+\subsection{DNS y lifetime}
+
+La resolución FQDN corre en un hilo detached que sólo ejecuta \texttt{getaddrinfo}
+y notifica al selector. La notificación lleva identidad del objeto de conexión y
+cleanup asociado. El proceso de apagado espera a que no haya resoluciones DNS en
+vuelo antes de destruir selector y pool.
+
+\subsection{PMC}
+
+El PMC tiene su propio listener y su propia STM, pero comparte el mismo selector
+del servidor. El cliente CLI usa I/O bloqueante por simplicidad, permitido por la
+consigna, y encapsula el framing del protocolo.

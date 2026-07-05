@@ -1,0 +1,22 @@
+\section{Guía de instalación}
+
+Dependencias:
+\begin{itemize}[nosep]
+  \item compilador C11 (\texttt{gcc} o \texttt{clang});
+  \item \texttt{make};
+  \item \texttt{python3} para integraciones y stress;
+  \item \texttt{valgrind} en Linux/Pampero para memoria/fds;
+  \item \texttt{matplotlib} si se quieren regenerar gráficos de stress.
+\end{itemize}
+
+Compilación:
+\begin{verbatim}
+make clean && make
+\end{verbatim}
+
+Artefactos generados:
+\begin{itemize}[nosep]
+  \item \texttt{bin/server}: servidor SOCKS5 + PMC;
+  \item \texttt{bin/client}: cliente CLI del PMC;
+  \item \texttt{docs/report/main.pdf}: este informe.
+\end{itemize}

@@ -1,0 +1,22 @@
+\section{Problemas encontrados}
+
+\begin{longtable}{p{0.25\linewidth}p{0.65\linewidth}}
+\toprule
+\textbf{Problema} & \textbf{Resolución} \\
+\midrule
+Portabilidad Linux/macOS & Se usaron macros de plataforma en el Makefile para
+exponer APIs POSIX bajo C11 sin romper macOS. \\
+I/O parcial y pipelining & Los parsers consumen desde buffers y preservan bytes
+sobrantes para el siguiente estado. Esto evita perder AUTH o REQUEST enviados en
+el mismo segmento. \\
+Errores del selector base & Se corrigieron casos de flags no bloqueantes,
+límites de fd y headers no autocontenidos. \\
+DNS bloqueante & La resolución se aisló en hilos \texttt{pthread} dedicados a
+\texttt{getaddrinfo}; el resultado vuelve al selector por notificación. \\
+Reuso de fd durante DNS & Las notificaciones de DNS llevan identidad del objeto
+de conexión para no despachar un resultado viejo sobre una conexión nueva. \\
+Half-close pre-COPY & Si el cliente envía payload temprano y hace half-close
+mientras el \texttt{connect} está pendiente, el proxy conserva el payload y lo
+drena al origin al entrar en \texttt{COPY}. \\
+\bottomrule
+\end{longtable}
