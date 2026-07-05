@@ -1,31 +1,14 @@
 #!/usr/bin/env bash
-# =============================================================================
-# EJEMPLO / PLANTILLA — Probar el TPE en pampero desde tu propia máquina.
-#
-# Para tus compañeros: COPIÁ este archivo (p. ej. a `extras/run-on-pampero.sh`,
-# que está gitignoreado), cambiá PAMPERO_USER por TU usuario de pampero, y corré:
-#
-#     bash extras/run-on-pampero.sh
-#
-# Qué hace: abre UNA conexión SSH (te pide la password una sola vez), sube el
-# repo con rsync, y compila + corre un smoke test en pampero (Linux real).
-#
-# ¿Por qué password y no clave pública?  En pampero los homes están en CephFS y
-# el sshd central NO acepta autenticación por clave (aunque la instales bien con
-# permisos 700/700/600). Por eso usamos "ControlMaster": ssh autentica una vez y
-# reusamos esa conexión para rsync + comandos. La password la maneja ssh en su
-# propio prompt; este script NUNCA la lee, guarda ni registra.
-# =============================================================================
 set -euo pipefail
 
-# ----------------------------- CONFIG (editá esto) ---------------------------
-PAMPERO_USER="TU_USUARIO"               # <-- tu usuario de pampero (ej. jperez)
+# --------------------------------- CONFIG ------------------------------------
+PAMPERO_USER="TU_USUARIO"               # <-- Cambiar por usuario de pampero
 HOST="pampero.itba.edu.ar"
-REMOTE_DIR="tpe-test"                   # carpeta destino dentro de tu home
-PORT="${1:-11080}"                      # puerto de prueba (cambialo si choca)
+REMOTE_DIR="tp-protos-test"
+PORT="${1:-11080}"                      # puerto de prueba
 
 # Raíz del repo. Por defecto asume que este script vive en un subdir del repo
-# (docs/ o extras/). Si lo copiás a otro lado, seteá REPO_ROOT a mano:
+# (docs). Si lo copiás a otro lado, seteá REPO_ROOT a mano:
 #   REPO_ROOT=/ruta/al/repo bash run-on-pampero.sh
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # -----------------------------------------------------------------------------
@@ -60,9 +43,11 @@ echo "[entorno] $(uname -sr) | $(gcc --version 2>/dev/null | head -1)"
 
 echo "[build]   make clean && make"
 make clean >/dev/null 2>&1
-if make 2>/tmp/tpe_build.log; then echo "          BUILD OK"; else
-  echo "          BUILD FALLA"; cat /tmp/tpe_build.log; exit 1
+BUILD_LOG="$(mktemp /tmp/tpe_build_XXXXXX.log)"
+if make 2>"$BUILD_LOG"; then echo "          BUILD OK"; else
+  echo "          BUILD FALLA"; cat "$BUILD_LOG"; rm -f "$BUILD_LOG"; exit 1
 fi
+rm -f "$BUILD_LOG"
 
 echo "[unit]  make test"
 make test || echo "  (unit tests con fallas)"
