@@ -1,10 +1,6 @@
 # Protocolo de Monitoreo y Configuración (PMC) — Borrador v0
 
-> **Estado:** BORRADOR. Documento "estilo RFC", agnóstico al lenguaje, para el
-> protocolo propio de administración del servidor SOCKS5 del TPE.
-> Pulir antes de la entrega; este draft fija la base decidida en el grilling
-> (ver `DECISIONS.md` D1/D2). Las palabras clave DEBE/PUEDE se interpretan
-> según RFC2119.
+> **Estado:** BORRADOR.
 
 ## 1. Generalidades
 - **Transporte:** TCP. Escucha en un socket pasivo **distinto** al de SOCKS5
@@ -62,7 +58,7 @@ S: -ERR auth failed         ; el servidor DEBE cerrar la conexión
 ## 5. Respuestas multi-línea (count-prefix)
 Para `LIST-USERS` y `METRICS`, la primera línea es `+OK <N>` y le siguen
 exactamente `N` líneas de datos. Esto permite al cliente saber cuántas leer
-sin ambigüedad (alineado con el length-prefix que mostró el profe para GET).
+sin ambigüedad (alineado con el length-prefix para GET).
 ```
 C: METRICS
 S: +OK 3
@@ -75,10 +71,7 @@ S: failed-connections 3
 
 ## 6. Pipelining
 El cliente PUEDE enviar varios comandos sin esperar cada respuesta; el servidor
-DEBE responder **en el mismo orden** en que llegaron. (El profe lo recomendó
-explícitamente: "es relativamente chiquito, está bueno que los protocolos lo
-incluyan".)
-
+DEBE responder **en el mismo orden** en que llegaron.
 ## 7. Ejemplo de sesión completa
 ```
 C: HELLO 1
