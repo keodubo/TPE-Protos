@@ -3,16 +3,18 @@
 Servidor proxy **SOCKS5 (RFC1928)** en C11 con I/O no bloqueante multiplexado,
 más un protocolo propio de monitoreo y configuración con su cliente de terminal.
 
+## Informe
+El informe se encuentra [aquí](docs/report/main.pdf).
 
 ## Compilación
-Requiere `gcc` (o `clang`) y `make`. Probado en **Linux** (pampero) y **macOS**.
+Requiere `gcc` (o `clang`) y `make`. Probado en **Linux** y **macOS**.
 ```bash
 make            # compila server y client
 make server     # solo el servidor -> bin/server
 make client     # solo el cliente  -> bin/client
 make clean      # borra obj/ y bin/
 make check      # unitarios + integracion M1-M7
-make valgrind   # Linux/Pampero: leak/fd check con trafico real
+make valgrind   # Linux: leak/fd check con trafico real
 ```
 Los binarios quedan en `bin/`.
 
