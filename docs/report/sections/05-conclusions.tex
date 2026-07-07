@@ -6,6 +6,12 @@ La separación entre SOCKS5 y PMC permite administrar usuarios, configuración y
 métricas sin mezclar el plano de datos con el plano de control.
 
 La evidencia local muestra que la suite M1-M7 pasa y que el banco de stress
-produce CSV y gráficos reproducibles. El cierre final de entrega requiere dos
-validaciones externas al smoke local: Valgrind en Linux/Pampero y una corrida de
-stress completa en el entorno de entrega.
+produce CSV y gráficos reproducibles. En Pampero/Linux se verificó la build, los
+unitarios, las integraciones M1-M7 y Valgrind con tráfico real sin errores ni
+leaks definitivos. En M5 hubo un \texttt{skip} esperado para el caso de retry
+multi-IP no aplicable a ese entorno, no una falla.
+
+La prueba de stress versionada es un smoke local macOS; sirve para explicar
+metodología, métricas y generación de gráficos, pero no se presenta como barrido
+completo de capacidad en Pampero. Además se ejecutó una prueba ad hoc local de
+500 conexiones con \texttt{conn\_ok=500} y \texttt{conn\_failed=0}.

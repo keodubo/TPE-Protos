@@ -375,6 +375,57 @@ main(void) {
               "19: REP address type not supported");
     }
 
+    /* --- 20: FQDN con LF embebido -> error ATYP no soportado --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[32]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t req[] = {
+            0x05, 0x01, 0x00, 0x03, 0x0B,
+            'e', 'v', 'i', 'l', '\n', 'h', 'o', 's', 't', '.', 'x'
+        };
+        fill(&b, req, sizeof(req));
+        bool err = false;
+        enum request_state st = request_consume(&b, &p, &err);
+        CHECK(err && request_is_done(st, &err),
+              "20: FQDN con LF embebido marca error");
+        CHECK(request_state_rep(st) == 0x08,
+              "20: REP address type not supported");
+    }
+
+    /* --- 21: FQDN con CR embebido -> error ATYP no soportado --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[32]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t req[] = {
+            0x05, 0x01, 0x00, 0x03, 0x0B,
+            'e', 'v', 'i', 'l', '\r', 'h', 'o', 's', 't', '.', 'x'
+        };
+        fill(&b, req, sizeof(req));
+        bool err = false;
+        enum request_state st = request_consume(&b, &p, &err);
+        CHECK(err && request_is_done(st, &err),
+              "21: FQDN con CR embebido marca error");
+        CHECK(request_state_rep(st) == 0x08,
+              "21: REP address type not supported");
+    }
+
+    /* --- 22: FQDN con TAB embebido -> error ATYP no soportado --- */
+    {
+        struct request_parser p; request_parser_init(&p);
+        uint8_t raw[32]; buffer b; buffer_init(&b, sizeof(raw), raw);
+        uint8_t req[] = {
+            0x05, 0x01, 0x00, 0x03, 0x0B,
+            'e', 'v', 'i', 'l', '\t', 'h', 'o', 's', 't', '.', 'x'
+        };
+        fill(&b, req, sizeof(req));
+        bool err = false;
+        enum request_state st = request_consume(&b, &p, &err);
+        CHECK(err && request_is_done(st, &err),
+              "22: FQDN con TAB embebido marca error");
+        CHECK(request_state_rep(st) == 0x08,
+              "22: REP address type not supported");
+    }
+
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

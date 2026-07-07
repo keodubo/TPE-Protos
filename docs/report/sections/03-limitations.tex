@@ -15,5 +15,13 @@ drenaje graceful de conexiones activas, pero no destruye el selector ni el pool
 mientras haya resoluciones DNS pendientes. Esto evita use-after-free, al costo de
 esperar si \texttt{getaddrinfo} tarda.
 
-Valgrind/Pampero no fue ejecutado en este host macOS. Debe correrse en Linux
-antes de afirmar que no hay leaks ni file descriptors abiertos.
+El PMC no cifra el canal. Por eso se entrega con escucha por defecto en
+\texttt{127.0.0.1}; para una demo debe usarse \texttt{-{}-admin} con credenciales
+no-default y evitar exponerlo fuera de una red administrativa controlada.
+
+La validación con Valgrind se realizó en Pampero/Linux con tráfico real:
+\texttt{ERROR SUMMARY: 0 errors from 0 contexts}, \texttt{0 bytes} en
+\texttt{definitely lost}, \texttt{indirectly lost} y \texttt{possibly lost}, y
+dos file descriptors heredados al terminar. Quedaron \texttt{5,658 bytes} como
+\texttt{still reachable}, atribuibles al entorno/libc y no a leaks definitivos
+del servidor.

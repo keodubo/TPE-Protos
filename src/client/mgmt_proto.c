@@ -7,11 +7,15 @@
 #include <unistd.h>
 #include <sys/socket.h>
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 static int
 write_all(const int fd, const char *buf, const size_t len) {
     size_t sent = 0;
     while (sent < len) {
-        const ssize_t n = send(fd, buf + sent, len - sent, 0);
+        const ssize_t n = send(fd, buf + sent, len - sent, MSG_NOSIGNAL);
         if (n > 0) {
             sent += (size_t) n;
         } else if (n == -1 && errno == EINTR) {
@@ -64,6 +68,9 @@ mgmt_connect(const char *host, const char *port) {
         if (fd == -1) {
             continue;
         }
+#ifdef SO_NOSIGPIPE
+        (void) setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &(int){1}, sizeof(int));
+#endif
         if (connect(fd, p->ai_addr, p->ai_addrlen) == 0) {
             break;
         }

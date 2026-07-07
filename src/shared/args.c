@@ -49,7 +49,7 @@ version(void)
 }
 
 static void
-usage(const char* progname)
+usage(const char* progname, const int status)
 {
     fprintf(stderr,
             "Usage: %s [OPTION]...\n"
@@ -65,7 +65,7 @@ usage(const char* progname)
 
             "\n",
             progname);
-    exit(1);
+    exit(status);
 }
 
 void
@@ -109,7 +109,7 @@ parse_args(const int argc, char** argv, struct socks5args* args)
             break;
         }
         case 'h':
-            usage(argv[0]);
+            usage(argv[0], 0);
             break;
         case 'l':
             args->socks_addr = optarg;

@@ -6,6 +6,11 @@
 
 #include "request.h"
 
+static bool
+request_fqdn_char_allowed(const uint8_t b) {
+    return b >= 0x21 && b != 0x7F;
+}
+
 void
 request_parser_init(struct request_parser *p) {
     p->state    = request_version;
@@ -62,7 +67,7 @@ request_parser_feed(struct request_parser *p, const uint8_t b) {
             break;
         case request_dst_addr:
             if (p->request.atyp == REQUEST_ATYP_DOMAINNAME) {
-                if (b == 0) {
+                if (!request_fqdn_char_allowed(b)) {
                     p->state = request_error_unsupported_atyp;
                     break;
                 }

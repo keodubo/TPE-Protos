@@ -1,0 +1,2 @@
+run_id,concurrency,payload_bytes,signal_count,active_before_signal,new_conn_after_signal,connections_completed,connections_aborted,server_exited,server_exit_code,shutdown_wall_s,forced_wall_s,first_error
+2026-07-05_local-smoke_v1,50,1048576,0,,,,,,,,,skipped

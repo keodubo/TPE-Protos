@@ -14,9 +14,20 @@ docs/report/*.log
 # === Extras ===
 tmp/
 /extras/
-scripts/
 /docs/extras
-/docs/stress
+
+# Se versiona solo el runner oficial de Pampero; otros scripts locales quedan fuera.
+/scripts/*
+!/scripts/run-on-pampero.sh
+
+# Evidencia minima de stress entregable. Se excluyen logs operativos grandes/ruidosos.
+/docs/stress/*
+!/docs/stress/2026-07-05_local-smoke_v1/
+!/docs/stress/2026-07-05_local-smoke_v1/*.csv
+!/docs/stress/2026-07-05_local-smoke_v1/*.png
+!/docs/stress/2026-07-05_local-smoke_v1/*.svg
+!/docs/stress/2026-07-05_local-smoke_v1/env.txt
+/docs/stress/**/*.log
 
 
 # === macOS ===

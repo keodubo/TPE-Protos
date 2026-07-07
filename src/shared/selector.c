@@ -299,7 +299,10 @@ selector_new(const size_t initial_elements) {
         ret->master_t.tv_nsec = conf.select_timeout.tv_nsec;
         assert(ret->max_fd == 0);
         ret->resolution_jobs  = 0;
-        pthread_mutex_init(&ret->resolution_mutex, 0);
+        if (pthread_mutex_init(&ret->resolution_mutex, 0) != 0) {
+            free(ret);
+            return NULL;
+        }
         if(0 != ensure_capacity(ret, initial_elements)) {
             selector_destroy(ret);
             ret = NULL;
@@ -318,7 +321,6 @@ selector_destroy(fd_selector s) {
                     selector_unregister_fd(s, i);
                 }
             }
-            pthread_mutex_destroy(&s->resolution_mutex);
             struct selector_block_job* j = s->resolution_jobs;
             while (j != NULL) {
                 struct selector_block_job* aux = j;
@@ -337,6 +339,7 @@ selector_destroy(fd_selector s) {
             s->fds     = NULL;
             s->fd_size = 0;
         }
+        pthread_mutex_destroy(&s->resolution_mutex);
         free(s);
     }
 }

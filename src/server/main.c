@@ -46,12 +46,17 @@ unsigned resolv_pending_count(void);
 
 #define LISTEN_BACKLOG 20
 
-static volatile sig_atomic_t signal_count = 0;
+static volatile sig_atomic_t got_signal = 0;
+static volatile sig_atomic_t force_signal = 0;
 
 static void
 sig_handler(const int signal) {
     (void) signal;
-    signal_count++;
+    if (got_signal) {
+        force_signal = 1;
+    } else {
+        got_signal = 1;
+    }
 }
 
 static void
@@ -235,13 +240,14 @@ main(const int argc, char **argv) {
             goto finally;
         }
 
-        const int sig_count = signal_count;
-        if (sig_count >= 2) {
+        const sig_atomic_t force_shutdown = force_signal;
+        const sig_atomic_t graceful_shutdown = got_signal;
+        if (force_shutdown) {
             close_passives(selector, &socks_fd, &mgmt_fd);
             break;
         }
 
-        if (sig_count == 1 && !draining) {
+        if (graceful_shutdown && !draining) {
             draining = true;
             close_passives(selector, &socks_fd, &mgmt_fd);
             fprintf(stdout, "draining: %lu conexiones activas\n", metrics_get()->current_connections);

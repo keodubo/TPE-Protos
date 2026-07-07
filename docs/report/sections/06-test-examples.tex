@@ -1,29 +1,90 @@
 \section{Ejemplos de prueba}
 
-\begin{longtable}{p{0.35\linewidth}p{0.2\linewidth}p{0.35\linewidth}}
+\begin{longtable}{p{0.34\linewidth}p{0.22\linewidth}p{0.34\linewidth}}
 \toprule
 \textbf{Comando} & \textbf{Estado} & \textbf{Observación} \\
 \midrule
-\texttt{make clean \&\& make} & Verificado local & Compila server y client. \\
-\texttt{make check} & Verificado local & Unitarios e integración M1-M7. \\
-\texttt{test/m4\_integration.sh} & Verificado local & Incluye payload temprano con half-close pre-COPY. \\
-\texttt{make valgrind PORT=...} & Pendiente & Debe correrse en Linux/Pampero. \\
-\texttt{test/stress/run\_stress.py} & Smoke local & Generó CSV y figuras bajo macOS. \\
+\texttt{make clean \&\& make} & Verificado local y Pampero & Compila
+\texttt{bin/server} y \texttt{bin/client} sin warnings visibles. \\
+\texttt{make test} & Verificado local y Pampero & Unitarios C del parser,
+usuarios, métricas, logger, selector bloqueante y relay. \\
+\texttt{make check PORT=12080} & Verificado local y Pampero & Unitarios más
+integración M1-M7 sobre sockets reales. \\
+\texttt{make valgrind PORT=...} & Verificado en Pampero & Valgrind con tráfico:
+0 errores, 0 leaks definitivos/indirectos/posibles. \\
+\texttt{test/stress/run\_stress.py} & Smoke local macOS & Genera CSV y figuras
+reproducibles; no reemplaza un barrido completo de capacidad en Pampero. \\
 \bottomrule
 \end{longtable}
 
-\subsection{Smoke local de stress}
+\subsection{Corrida Pampero/Linux}
 
-La corrida local se guardó en:
+La corrida remota se ejecutó en \texttt{pampero.it.itba.edu.ar}, Linux
+\texttt{7.0.9-arch1-1}, GCC \texttt{16.1.1 20260625}. El build
+\texttt{make clean \&\& make} terminó con \texttt{BUILD OK}.
+
+Los unitarios reportaron todos los casos OK; entre los totales relevantes:
+\begin{itemize}[nosep]
+  \item \texttt{hello\_test 21/0}, \texttt{auth\_test 19/0},
+  \texttt{users\_test 35/0} y \texttt{request\_test 63/0};
+  \item \texttt{connect\_test 23/0}, \texttt{copy\_test 18/0} y
+  \texttt{netutils\_test 20/0};
+  \item \texttt{selector\_block\_test 17/0}, \texttt{metrics\_test 16/0} y
+  \texttt{logger\_test 4/0}.
+\end{itemize}
+
+La integración M1-M7 terminó sin fallas:
+\begin{itemize}[nosep]
+  \item M1: \texttt{6 ok, 0 fallas};
+  \item M2: \texttt{8 ok, 0 fallas};
+  \item M3: \texttt{14 ok, 0 fallas};
+  \item M4: \texttt{19 ok, 0 fallas};
+  \item M5: \texttt{7 ok, 0 fallas, 1 skip}; el \texttt{skip} corresponde al
+  retry multi-IP no aplicable en ese entorno, no a una falla funcional;
+  \item M6: access-log OK y FAIL emitidos;
+  \item M7: \texttt{35 ok, 0 fallas}.
+\end{itemize}
+
+Valgrind con tráfico real reportó:
+\begin{itemize}[nosep]
+  \item \texttt{FILE DESCRIPTORS: 2 open (2 inherited) at exit};
+  \item \texttt{definitely lost: 0 bytes}, \texttt{indirectly lost: 0 bytes} y
+  \texttt{possibly lost: 0 bytes};
+  \item \texttt{ERROR SUMMARY: 0 errors from 0 contexts}.
+\end{itemize}
+Los \texttt{5,658 bytes} \texttt{still reachable} se consideran alcanzables del
+entorno/libc, no leaks definitivos del programa.
+
+\subsection{Stress local}
+
+El banco de stress se genera con \texttt{test/stress/run\_stress.py}. El script
+levanta un origin controlado, ejecuta el servidor SOCKS5, consulta métricas por
+PMC y escribe CSV bajo un directorio de salida. Los parámetros principales son:
+
+\begin{itemize}[nosep]
+  \item concurrencia: cantidad de conexiones simultáneas por caso;
+  \item payload: bytes transferidos por conexión;
+  \item modo de destino: \texttt{ipv4} o \texttt{fqdn};
+  \item métricas recolectadas: conexiones OK/fallidas, bytes, wall time,
+  throughput, tasa de conexiones, latencias p50/p95, REP no exitosos y deltas
+  de métricas PMC.
+\end{itemize}
+
+La evidencia versionada corresponde al smoke local macOS guardado en:
 \begin{center}
 \texttt{docs/stress/2026-07-05\_local-smoke\_v1/}
 \end{center}
+
+Ese smoke usó concurrencias 5 y 20, payloads 1024 y 8192 bytes, targets IPv4 y
+FQDN, y una repetición por combinación. También hubo una prueba local ad hoc de
+500 conexiones con \texttt{conn\_ok=500} y \texttt{conn\_failed=0}. No se
+presenta como máximo absoluto del servidor ni como barrido completo en Pampero.
 
 \IfFileExists{../stress/2026-07-05_local-smoke_v1/2026-07-05_fig-throughput-vs-concurrency_v1.png}{
 \begin{figure}[h]
   \centering
   \includegraphics[width=0.82\linewidth]{2026-07-05_fig-throughput-vs-concurrency_v1.png}
-  \caption{Throughput agregado en el smoke local. No reemplaza la corrida Pampero.}
+  \caption{Throughput agregado del smoke local por concurrencia y modo de destino.}
 \end{figure}
 }{}
 
@@ -31,6 +92,14 @@ La corrida local se guardó en:
 \begin{figure}[h]
   \centering
   \includegraphics[width=0.82\linewidth]{2026-07-05_fig-error-rate-vs-concurrency_v1.png}
-  \caption{Tasa de error en el smoke local.}
+  \caption{Tasa de error del smoke local. En la corrida versionada no hubo conexiones fallidas.}
+\end{figure}
+}{}
+
+\IfFileExists{../stress/2026-07-05_local-smoke_v1/2026-07-05_fig-latency-p50-p95-vs-concurrency_v1.png}{
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.82\linewidth]{2026-07-05_fig-latency-p50-p95-vs-concurrency_v1.png}
+  \caption{Latencias p50/p95 totales del smoke local.}
 \end{figure}
 }{}

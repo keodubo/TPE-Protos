@@ -26,7 +26,7 @@ de una dirección, el proxy reintenta con la siguiente dirección si el primer
 El Protocolo de Monitoreo y Configuración (PMC) usa TCP en un socket separado
 del proxy SOCKS5. Es textual, orientado a líneas \texttt{CRLF}, y usa respuestas
 \texttt{+OK}/\texttt{-ERR}. El cliente inicia con \texttt{HELLO 1}, luego
-autentica con \texttt{AUTH <admin-user> <admin-pass>}.
+autentica con \texttt{AUTH usuario password}.
 
 Los comandos implementados son \texttt{ADD-USER}, \texttt{DEL-USER},
 \texttt{LIST-USERS}, \texttt{METRICS}, \texttt{GET-CONFIG},

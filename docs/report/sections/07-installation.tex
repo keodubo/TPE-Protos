@@ -6,7 +6,8 @@ Dependencias:
   \item \texttt{make};
   \item \texttt{python3} para integraciones y stress;
   \item \texttt{valgrind} en Linux/Pampero para memoria/fds;
-  \item \texttt{matplotlib} si se quieren regenerar gráficos de stress.
+  \item \texttt{matplotlib} si se quieren regenerar gráficos de stress;
+  \item \texttt{rsync} y \texttt{ssh} para el runner de Pampero.
 \end{itemize}
 
 Compilación:
@@ -20,3 +21,11 @@ Artefactos generados:
   \item \texttt{bin/client}: cliente CLI del PMC;
   \item \texttt{docs/report/main.pdf}: este informe.
 \end{itemize}
+
+Verificación remota recomendada:
+\begin{verbatim}
+PAMPERO_USER=<usuario> bash scripts/run-on-pampero.sh 12080
+\end{verbatim}
+
+El script sube el repo a Pampero, recompila desde cero y ejecuta unitarios,
+integración M1-M7 y Valgrind con tráfico real.
