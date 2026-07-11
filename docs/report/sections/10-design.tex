@@ -14,6 +14,12 @@ lecturas y escrituras parciales.
 \texttt{COPY} mantiene dos direcciones de relay: cliente a origen y origen a
 cliente. Cada dirección tiene su estado de lectura/escritura; al recibir EOF en
 un sentido se drena lo pendiente y se propaga \texttt{shutdown(SHUT\_WR)} al par.
+Cuando una lectura produce datos, el relay realiza inmediatamente un único
+intento de escritura no bloqueante sobre el socket opuesto. En el caso favorable
+esto evita una vuelta adicional \texttt{pselect} $\rightarrow$ \texttt{write}; ante una escritura
+parcial o \texttt{EAGAIN}, conserva los bytes pendientes en el buffer y delega el
+drenaje posterior al selector. El límite de un intento por activación preserva la
+equidad del event loop entre conexiones concurrentes.
 
 \subsection{DNS y lifetime}
 

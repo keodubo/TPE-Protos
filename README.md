@@ -134,7 +134,7 @@ Evidencia disponible de Pampero/Linux:
 - Entorno: `pampero.it.itba.edu.ar`, Linux `7.0.9-arch1-1`, GCC `16.1.1 20260625`.
 - `make clean && make`: `BUILD OK`.
 - Unitarios OK: `hello_test 21/0`, `auth_test 19/0`, `users_test 35/0`,
-  `request_test 63/0`, `connect_test 23/0`, `copy_test 18/0`,
+  `request_test 63/0`, `connect_test 23/0`, `copy_test 17/0`,
   `netutils_test 20/0`, `selector_block_test 17/0`, `metrics_test 16/0`,
   `logger_test 4/0`.
 - Integracion: M1 `6 ok`, M2 `8 ok`, M3 `14 ok`, M4 `19 ok`, M5 `7 ok` con

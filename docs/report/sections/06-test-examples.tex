@@ -12,6 +12,9 @@ usuarios, métricas, logger, selector bloqueante y relay. \\
 integración M1-M7 sobre sockets reales. \\
 \texttt{make valgrind PORT=...} & Verificado en Pampero & Valgrind con tráfico:
 0 errores, 0 leaks definitivos/indirectos/posibles. \\
+\texttt{strace} sobre relay HTTP & Verificado en Pampero & En ambos sentidos se
+observó \texttt{recvfrom} $\rightarrow$ \texttt{sendto} sin un
+\texttt{pselect6} intermedio. \\
 \texttt{test/stress/run\_stress.py} & Smoke local macOS & Genera CSV y figuras
 reproducibles; no reemplaza un barrido completo de capacidad en Pampero. \\
 \bottomrule
@@ -27,7 +30,7 @@ Los unitarios reportaron todos los casos OK; entre los totales relevantes:
 \begin{itemize}[nosep]
   \item \texttt{hello\_test 21/0}, \texttt{auth\_test 19/0},
   \texttt{users\_test 35/0} y \texttt{request\_test 63/0};
-  \item \texttt{connect\_test 23/0}, \texttt{copy\_test 18/0} y
+  \item \texttt{connect\_test 23/0}, \texttt{copy\_test 17/0} y
   \texttt{netutils\_test 20/0};
   \item \texttt{selector\_block\_test 17/0}, \texttt{metrics\_test 16/0} y
   \texttt{logger\_test 4/0}.
