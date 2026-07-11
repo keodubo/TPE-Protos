@@ -61,6 +61,27 @@ copy_next_state(struct socks5 *s) {
     return COPY;
 }
 
+/* Hace un único intento de escritura no bloqueante. Un intento por activación
+ * evita una vuelta select -> write cuando copy_read acaba de producir datos,
+ * sin monopolizar el event loop si el destino acepta sólo una escritura
+ * parcial o responde EAGAIN. */
+static int
+copy_try_write(struct copy *c) {
+    size_t   count = 0;
+    uint8_t *ptr   = buffer_read_ptr(c->wb, &count);
+    if (count > 0) {
+        const ssize_t n = send(*c->fd, ptr, count, MSG_NOSIGNAL);
+        if (n > 0) {
+            buffer_read_adv(c->wb, n);
+        } else if (n == -1
+                && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            return -1;
+        }
+    }
+    copy_maybe_shutdown_peer(c->other);
+    return 0;
+}
+
 selector_status
 copy_compute_interests(struct copy *c) {
     fd_interest interest = OP_NOOP;
@@ -122,6 +143,9 @@ copy_read(struct selector_key *key) {
         if (n > 0) {
             buffer_write_adv(c->rb, n);
             metrics_add_bytes((size_t) n);
+            if (copy_try_write(c->other) == -1) {
+                return ERROR;
+            }
         } else if (n == 0) {
             c->duplex = INTEREST_OFF(c->duplex, OP_READ);
             copy_maybe_shutdown_peer(c);
@@ -147,19 +171,9 @@ copy_write(struct selector_key *key) {
     }
     copy_set_key(c, key);
 
-    size_t   count = 0;
-    uint8_t *ptr   = buffer_read_ptr(c->wb, &count);
-    if (count > 0) {
-        const ssize_t n = send(*c->fd, ptr, count, MSG_NOSIGNAL);
-        if (n > 0) {
-            buffer_read_adv(c->wb, n);
-        } else if (n == -1
-                && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-            return ERROR;
-        }
+    if (copy_try_write(c) == -1) {
+        return ERROR;
     }
-
-    copy_maybe_shutdown_peer(c->other);
     if (copy_compute_pair(c) != SELECTOR_SUCCESS) {
         return ERROR;
     }

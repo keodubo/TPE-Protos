@@ -350,8 +350,9 @@ main(void) {
         selector_destroy(s);
     }
 
-    /* --- 8: transferencia real client->origin: copy_read del cliente carga el
-     *        buffer y copy_write del origin lo drena hacia su peer. --- */
+    /* --- 8: transferencia real client->origin en una sola activación:
+     *        copy_read intenta drenar inmediatamente hacia el peer, sin exigir
+     *        otra vuelta selector -> write. --- */
     {
         fd_selector s = selector_new(16);
 
@@ -383,20 +384,16 @@ main(void) {
         (void) write(cli[1], payload, strlen(payload));
 
         struct selector_key kc = { .s = s, .fd = cli[0], .data = &s5 };
-        unsigned r1 = copy_read(&kc);   /* carga read_buffer (rb del cliente) */
+        unsigned r1 = copy_read(&kc);
         CHECK(r1 == COPY, "8: copy_read del cliente sigue en COPY");
         CHECK(metrics_get()->bytes_transferred == strlen(payload),
               "8: copy_read suma bytes reales a métricas");
-
-        struct selector_key ko = { .s = s, .fd = ori[0], .data = &s5 };
-        unsigned r2 = copy_write(&ko);  /* drena hacia ori[0] -> peer ori[1] */
-        CHECK(r2 == COPY, "8: copy_write del origin sigue en COPY");
 
         char got[64];
         ssize_t n = recv(ori[1], got, sizeof(got), 0);
         CHECK(n == (ssize_t) strlen(payload) &&
               memcmp(got, payload, strlen(payload)) == 0,
-              "8: el payload del cliente llega íntegro al peer del origin");
+              "8: copy_read reenvía inmediatamente al peer del origin");
 
         selector_unregister_fd(s, cli[0]);
         selector_unregister_fd(s, ori[0]);
