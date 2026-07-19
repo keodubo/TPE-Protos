@@ -1,34 +1,38 @@
 \section{Descripción de protocolos y aplicaciones}
 
-El proyecto entrega dos ejecutables principales. \texttt{bin/server} implementa
-el proxy SOCKS5 y el socket de monitoreo/configuración. \texttt{bin/client}
-implementa una aplicación de terminal para hablar el protocolo de monitoreo sin
-usar \texttt{netcat}.
+La aplicación servidor actúa como intermediario entre clientes SOCKS5 y
+servicios TCP. En el mismo proceso ofrece un plano de administración separado,
+al que accede la aplicación cliente de terminal. Esta división evita que las
+operaciones administrativas se confundan con el tráfico que retransmite el
+proxy.
 
 \subsection{SOCKS5}
 
-El servidor implementa el flujo de SOCKS5 definido por RFC1928 y RFC1929:
-\begin{enumerate}[nosep]
-  \item negociación de método \texttt{HELLO};
-  \item autenticación usuario/contraseña;
-  \item \texttt{REQUEST CONNECT};
-  \item resolución DNS si el destino es FQDN;
-  \item conexión TCP no bloqueante al origen;
-  \item relay bidireccional transparente entre cliente y origen.
-\end{enumerate}
-
-Se soportan destinos IPv4, IPv6 y FQDN. Cuando \texttt{getaddrinfo} devuelve más
-de una dirección, el proxy reintenta con la siguiente dirección si el primer
-\texttt{connect} falla.
+El proxy acepta autenticación usuario/contraseña y el comando \texttt{CONNECT}
+para destinos IPv4, IPv6 o FQDN. Después de establecer la conexión saliente,
+retransmite bytes en ambos sentidos sin interpretar el protocolo de aplicación.
+Si un nombre resuelve a varias direcciones, conserva la lista y prueba la
+siguiente cuando una conexión falla. La decisión importante no fue reproducir
+los pasos de RFC1928 y RFC1929, sino integrarlos con lecturas parciales y con una
+máquina de estados que nunca presupone cómo se segmentan los datos en TCP.
 
 \subsection{Protocolo de monitoreo}
 
-El Protocolo de Monitoreo y Configuración (PMC) usa TCP en un socket separado
-del proxy SOCKS5. Es textual, orientado a líneas \texttt{CRLF}, y usa respuestas
-\texttt{+OK}/\texttt{-ERR}. El cliente inicia con \texttt{HELLO 1}, luego
-autentica con \texttt{AUTH usuario password}.
+El Protocolo de Monitoreo y Configuración (PMC) usa una conexión TCP persistente.
+Es textual y orientado a líneas terminadas en \texttt{CRLF}. Cada pedido empieza
+con un nombre de comando hasta el primer espacio o fin de línea; los campos
+restantes se separan por un único espacio. Para cada pedido el servidor devuelve
+una respuesta que comienza con \texttt{+OK} o \texttt{-ERR}. Antes de operar, el
+cliente negocia la versión y autentica una credencial administrativa.
 
 Los comandos implementados son \texttt{ADD-USER}, \texttt{DEL-USER},
 \texttt{LIST-USERS}, \texttt{METRICS}, \texttt{GET-CONFIG},
 \texttt{SET-CONFIG} y \texttt{QUIT}. Las respuestas multi-línea usan prefijo de
-cantidad para que el cliente sepa cuántas líneas leer.
+cantidad para delimitar la respuesta sin depender del cierre de la conexión. La
+gramática, los estados y cada respuesta posible se especifican en
+\texttt{docs/mgmt-protocol-rfc.md}.
+
+El cliente de terminal oculta la negociación y el formato de cable. Traduce
+subcomandos como \texttt{metrics} o \texttt{add-user} a pedidos PMC y presenta
+resultados etiquetados, listas y mensajes de error, en lugar de copiar las líneas
+recibidas del socket.

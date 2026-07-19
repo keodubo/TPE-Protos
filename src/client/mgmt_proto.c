@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <netdb.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -90,16 +91,20 @@ mgmt_send_line(const int fd, const char *line) {
 }
 
 int
-mgmt_read_reply(const int fd, struct mgmt_reply *reply, FILE *out) {
+mgmt_read_reply(const int fd, struct mgmt_reply *reply) {
     char line[MGMT_PROTO_LINE_MAX];
     if (read_line(fd, line, sizeof(line)) == -1) {
         fprintf(stderr, "client: no se pudo leer respuesta PMC\n");
         return -1;
     }
-    if (out != NULL) {
-        fprintf(out, "%s\n", line);
+    if (strcmp(line, "+OK") == 0 || strncmp(line, "+OK ", 4) == 0) {
+        reply->ok = 1;
+    } else if (strncmp(line, "-ERR ", 5) == 0) {
+        reply->ok = 0;
+    } else {
+        fprintf(stderr, "client: respuesta PMC invalida\n");
+        return -1;
     }
-    reply->ok = strncmp(line, "+OK", 3) == 0;
     if (strncmp(line, "+OK ", 4) == 0 || strncmp(line, "-ERR ", 5) == 0) {
         const char *text = line[0] == '+' ? line + 4 : line + 5;
         snprintf(reply->text, sizeof(reply->text), "%s", text);
@@ -110,33 +115,25 @@ mgmt_read_reply(const int fd, struct mgmt_reply *reply, FILE *out) {
 }
 
 int
-mgmt_expect_multiline(const int fd, const struct mgmt_reply *reply, FILE *out) {
-    char *end = NULL;
-    const unsigned long n = strtoul(reply->text, &end, 10);
-    if (end == reply->text || *end != '\0') {
-        return 0;
-    }
-    for (unsigned long i = 0; i < n; i++) {
-        char line[MGMT_PROTO_LINE_MAX];
-        if (read_line(fd, line, sizeof(line)) == -1) {
-            fprintf(stderr, "client: respuesta multilinea incompleta\n");
-            return -1;
-        }
-        if (out != NULL) {
-            fprintf(out, "%s\n", line);
-        }
+mgmt_read_data_line(const int fd, char *line, const size_t cap) {
+    if (read_line(fd, line, cap) == -1) {
+        fprintf(stderr, "client: respuesta multilinea incompleta\n");
+        return -1;
     }
     return 0;
 }
 
 int
-mgmt_handshake(const int fd, const char *user, const char *pass, FILE *out) {
-    struct mgmt_reply reply;
+mgmt_handshake(const int fd, const char *user, const char *pass,
+               struct mgmt_reply *reply) {
     char auth[MGMT_PROTO_LINE_MAX];
 
-    if (mgmt_send_line(fd, "HELLO 1\r\n") == -1
-            || mgmt_read_reply(fd, &reply, out) != 0) {
+    if (mgmt_send_line(fd, "HELLO 1\r\n") == -1) {
         return -1;
+    }
+    const int hello_status = mgmt_read_reply(fd, reply);
+    if (hello_status != 0) {
+        return hello_status;
     }
     const int n = snprintf(auth, sizeof(auth), "AUTH %s %s\r\n", user, pass);
     if (n < 0 || (size_t) n >= sizeof(auth)) {
@@ -146,5 +143,5 @@ mgmt_handshake(const int fd, const char *user, const char *pass, FILE *out) {
     if (mgmt_send_line(fd, auth) == -1) {
         return -1;
     }
-    return mgmt_read_reply(fd, &reply, out) == 0 ? 0 : -1;
+    return mgmt_read_reply(fd, reply);
 }

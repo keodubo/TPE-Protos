@@ -234,25 +234,32 @@ check(got == [b"+OK 1\r\n", b"+OK\r\n", b"-ERR bad value\r\n", b"-ERR bad value\
       "Q: SET-CONFIG buffer-size valida rango y numero", got)
 
 cp = client_cmd("add-user", "cliuser", "clipass")
-check("+OK" in cp.stdout, "R: CLI add-user imprime +OK", cp.stdout)
+check("Usuario 'cliuser' agregado." in cp.stdout,
+      "R: CLI add-user informa el resultado al usuario", cp.stdout)
 method, auth = socks_auth("cliuser", "clipass")
 check(method == b"\x05\x02" and auth == b"\x01\x00",
       "R: usuario creado por CLI autentica por SOCKS", (method, auth))
 
 cp = client_cmd("list-users")
-check("cliuser" in cp.stdout, "S: CLI list-users imprime usuario", cp.stdout)
+check("Usuarios (" in cp.stdout and "- cliuser" in cp.stdout,
+      "S: CLI list-users presenta una lista de usuarios", cp.stdout)
 
 cp = client_cmd("metrics")
-check("historic-connections" in cp.stdout and "bytes-transferred" in cp.stdout,
-      "T: CLI metrics imprime metricas", cp.stdout)
+check("Metricas:" in cp.stdout
+      and "Conexiones historicas:" in cp.stdout
+      and "Bytes transferidos:" in cp.stdout,
+      "T: CLI metrics presenta nombres legibles", cp.stdout)
 
 cp = client_cmd("set-config", "buffer-size", "32768")
-check("+OK" in cp.stdout, "U: CLI set-config imprime +OK", cp.stdout)
+check("Configuracion 'buffer-size' actualizada a 32768." in cp.stdout,
+      "U: CLI set-config informa la configuracion aplicada", cp.stdout)
 cp = client_cmd("get-config", "buffer-size")
-check("32768" in cp.stdout, "U: CLI get-config imprime nuevo valor", cp.stdout)
+check("buffer-size: 32768" in cp.stdout,
+      "U: CLI get-config identifica clave y valor", cp.stdout)
 
 cp = client_cmd("del-user", "cliuser")
-check("+OK" in cp.stdout, "V: CLI del-user imprime +OK", cp.stdout)
+check("Usuario 'cliuser' eliminado." in cp.stdout,
+      "V: CLI del-user informa el resultado al usuario", cp.stdout)
 method, auth = socks_auth("cliuser", "clipass")
 check(method == b"\x05\x02" and auth == b"\x01\x01",
       "V: usuario eliminado por CLI deja de autenticar", (method, auth))
@@ -260,8 +267,19 @@ check(method == b"\x05\x02" and auth == b"\x01\x01",
 bad = ["./bin/client", "-L", "127.0.0.1", "-P", str(mgmt_port),
        "--admin", "root:wrong", "metrics"]
 cp = subprocess.run(bad, text=True, capture_output=True, timeout=3)
-check(cp.returncode != 0 and "auth failed" in (cp.stdout + cp.stderr),
-      "W: CLI devuelve exit != 0 en -ERR", (cp.returncode, cp.stdout, cp.stderr))
+check(cp.returncode != 0 and "Error PMC: auth failed" in cp.stderr,
+      "W: CLI explica el error PMC por stderr", (cp.returncode, cp.stdout, cp.stderr))
+
+help_cp = subprocess.run(["./bin/client", "--help"], text=True,
+                         capture_output=True, timeout=3)
+check(help_cp.returncode == 0 and "  quit" not in help_cp.stderr,
+      "X: CLI no ofrece quit como operacion sin efecto util",
+      (help_cp.returncode, help_cp.stdout, help_cp.stderr))
+
+quit_cp = subprocess.run(["./bin/client", "quit"], text=True,
+                         capture_output=True, timeout=3)
+check(quit_cp.returncode == 2,
+      "X: CLI rechaza el antiguo subcomando quit", quit_cp.returncode)
 
 print(f"== RESULTADO M7: {checks - failures} ok, {failures} fallas ==")
 sys.exit(0 if failures == 0 else 1)

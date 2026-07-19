@@ -5,23 +5,16 @@ Una conexión SOCKS5 establecida consume dos file descriptors principales:
 cliente-proxy y proxy-origen. Por eso el techo real debe medirse en el entorno
 de entrega, no inferirse sólo desde el código.
 
-Las métricas son volátiles: se reinician al reiniciar el servidor. El access-log
-actual se escribe de forma síncrona con \texttt{fprintf}/\texttt{fflush}; para el
-alcance del TP es simple y auditable, pero bajo carga extrema puede introducir
-latencia.
+Las métricas se conservan sólo mientras vive el proceso. El access-log se escribe
+de forma síncrona con \texttt{fprintf}/\texttt{fflush}; esto facilita inspeccionar
+cada registro, pero puede introducir latencia cuando el dispositivo de salida es
+lento.
 
 El apagado controlado tiene una decisión explícita: una segunda señal corta el
 drenaje graceful de conexiones activas, pero no destruye el selector ni el pool
 mientras haya resoluciones DNS pendientes. Esto evita use-after-free, al costo de
 esperar si \texttt{getaddrinfo} tarda.
 
-El PMC no cifra el canal. Por eso se entrega con escucha por defecto en
-\texttt{127.0.0.1}; para una demo debe usarse \texttt{-{}-admin} con credenciales
-no-default y evitar exponerlo fuera de una red administrativa controlada.
-
-La validación con Valgrind se realizó en Pampero/Linux con tráfico real:
-\texttt{ERROR SUMMARY: 0 errors from 0 contexts}, \texttt{0 bytes} en
-\texttt{definitely lost}, \texttt{indirectly lost} y \texttt{possibly lost}, y
-dos file descriptors heredados al terminar. Quedaron \texttt{5,658 bytes} como
-\texttt{still reachable}, atribuibles al entorno/libc y no a leaks definitivos
-del servidor.
+El PMC autentica al administrador pero no cifra el canal. Debe utilizarse dentro
+de una red administrativa controlada o acompañado por una capa de transporte
+segura.

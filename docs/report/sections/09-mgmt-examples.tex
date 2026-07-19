@@ -8,22 +8,15 @@ Ejemplos con el cliente:
 ./bin/client --admin admin:s3cr3t get-config buffer-size
 ./bin/client --admin admin:s3cr3t set-config buffer-size 32768
 ./bin/client --admin admin:s3cr3t del-user pablito
-./bin/client --admin admin:s3cr3t quit
 \end{verbatim}
 
-Ejemplo de sesión cruda PMC:
+El cliente presenta los datos como operaciones de terminal, por ejemplo:
 \begin{verbatim}
-C: HELLO 1
-S: +OK 1
-C: AUTH admin s3cr3t
-S: +OK
-C: METRICS
-S: +OK 5
-S: historic-connections 10
-S: concurrent-connections 0
-S: bytes-transferred 123456
-S: configured-users 2
-S: failed-connections 1
-C: QUIT
-S: +OK bye
+$ ./bin/client --admin admin:s3cr3t metrics
+Metricas:
+Conexiones historicas: 10
+Conexiones concurrentes: 0
+Bytes transferidos: 123456
+Usuarios configurados: 2
+Conexiones fallidas: 1
 \end{verbatim}

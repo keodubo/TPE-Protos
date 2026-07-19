@@ -1,17 +1,28 @@
 \section{Conclusiones}
 
-La arquitectura mantiene el principio central de la consigna: I/O no bloqueante
-multiplexado en un único hilo, con la única excepción de hilos dedicados a DNS.
-La separación entre SOCKS5 y PMC permite administrar usuarios, configuración y
-métricas sin mezclar el plano de datos con el plano de control.
+El principal aprendizaje fue que I/O no bloqueante no significa reemplazar una
+llamada bloqueante por otra con una bandera. Cada evento habilita sólo una parte
+del trabajo: una lectura puede traer medio mensaje, una escritura puede aceptar
+algunos bytes y un \texttt{connect} puede quedar pendiente. Modelar ese progreso
+en estados y buffers hizo posible conservar datos y aplicar contrapresión sin
+detener a las demás conexiones.
 
-La evidencia local muestra que la suite M1-M7 pasa y que el banco de stress
-produce CSV y gráficos reproducibles. En Pampero/Linux se verificó la build, los
-unitarios, las integraciones M1-M7 y Valgrind con tráfico real sin errores ni
-leaks definitivos. En M5 hubo un \texttt{skip} esperado para el caso de retry
-multi-IP no aplicable a ese entorno, no una falla.
+La resolución de nombres mostró otro aspecto menos evidente: sacar
+\texttt{getaddrinfo} del hilo principal resuelve el bloqueo, pero introduce un
+problema de identidad y tiempo de vida. Tuvimos que razonar qué ocurre si el
+cliente se desconecta, el descriptor se reutiliza o el proceso comienza a
+apagarse mientras la resolución continúa. Aprendimos que la concurrencia debe
+analizarse por propiedad de los datos y no sólo por la cantidad de hilos.
 
-La prueba de stress versionada es un smoke local macOS; sirve para explicar
-metodología, métricas y generación de gráficos, pero no se presenta como barrido
-completo de capacidad en Pampero. Además se ejecutó una prueba ad hoc local de
-500 conexiones con \texttt{conn\_ok=500} y \texttt{conn\_failed=0}.
+Diseñar PMC también cambió nuestra forma de describir un protocolo. Los ejemplos
+sirven para ilustrar, pero no reemplazan una gramática, una máquina de estados ni
+reglas que delimiten cada respuesta. El prefijo de cantidad en respuestas
+multilínea y el orden en pipelining surgieron de preguntarnos cómo podría un
+cliente independiente interpretar el flujo sin conocer nuestra implementación.
+
+Por último, las mediciones de carga nos enseñaron a separar una observación de
+una afirmación de capacidad. Las gráficas permiten comparar throughput, latencia
+y errores bajo las combinaciones ejecutadas; no demuestran por sí solas un máximo
+universal. El límite de \texttt{pselect}, dado por \texttt{FD\_SETSIZE}, y el consumo de dos
+descriptores por conexión explican por qué el entorno y la metodología forman
+parte del resultado.

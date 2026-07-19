@@ -31,5 +31,8 @@ vuelo antes de destruir selector y pool.
 \subsection{PMC}
 
 El PMC tiene su propio listener y su propia STM, pero comparte el mismo selector
-del servidor. El cliente CLI usa I/O bloqueante por simplicidad, permitido por la
-consigna, y encapsula el framing del protocolo.
+del servidor. En el cliente, la capa de protocolo resuelve conexión, framing,
+negociación y lectura de respuestas. La capa de terminal construye cada pedido e
+interpreta el resultado para mostrar listas, métricas, confirmaciones o errores.
+El cliente usa I/O bloqueante porque atiende una sola operación interactiva por
+proceso; esa elección no afecta la concurrencia del servidor.

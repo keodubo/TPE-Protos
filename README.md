@@ -17,14 +17,14 @@ Protocolo de Monitoreo y Configuracion (PMC) con cliente de terminal propio.
 | Material | Ubicacion | Nota |
 |---|---|---|
 | Codigo fuente | `src/` | Servidor, cliente PMC y componentes compartidos. |
-| Tests | `test/` | Unitarios C y scripts de integracion M1-M7. |
+| Tests | `test/` | Unitarios C e integraciones de SOCKS5, DNS, relay, metricas y PMC. |
 | Build | `Makefile`, `Makefile.inc` | Compilacion C11, targets de test, check y Valgrind. |
 | Informe PDF | `docs/report/main.pdf` | Artefacto principal para entrega. |
 | Fuentes del informe | `docs/report/main.tex`, `docs/report/sections/` | LaTeX reproducible. |
 | RFC del PMC | `docs/mgmt-protocol-rfc.md` | Especificacion agnostica a implementacion. |
 | Runner Pampero | `scripts/run-on-pampero.sh` | Sube el repo y corre gates Linux/Pampero. |
 | Wrapper historico | `docs/run-on-pampero.sh` | Delega al runner oficial en `scripts/`. |
-| Evidencia de stress | `docs/stress/2026-07-05_local-smoke_v1/` | CSV, figuras y `env.txt` versionables; logs operativos no son material de entrega. |
+| Evidencia de stress | `docs/stress/2026-07-05_local-smoke_v1/` | CSV, figuras y datos del entorno de la corrida local. |
 | Binarios generados | `bin/server`, `bin/client` | Se generan con `make`; no se versionan. |
 
 ## Compilacion
@@ -70,8 +70,8 @@ Opciones relevantes:
 
 ## Cliente PMC
 
-El cliente habla el handshake `HELLO` + `AUTH` y luego emite un comando PMC. No
-es `netcat`; encapsula el protocolo de administracion en subcomandos.
+El cliente negocia la version, autentica al administrador, traduce cada
+subcomando al formato PMC y presenta la respuesta con etiquetas legibles.
 
 ```bash
 ./bin/client --admin admin:s3cr3t metrics
@@ -80,8 +80,10 @@ es `netcat`; encapsula el protocolo de administracion en subcomandos.
 ./bin/client --admin admin:s3cr3t list-users
 ./bin/client --admin admin:s3cr3t get-config buffer-size
 ./bin/client --admin admin:s3cr3t set-config buffer-size 32768
-./bin/client --admin admin:s3cr3t quit
 ```
+
+Cada invocacion realiza una operacion y cierra su conexion. El comando PMC
+`QUIT` queda reservado para clientes que mantengan una sesion persistente.
 
 Usar `-L <addr>` y `-P <port>` en el cliente si el PMC no esta en
 `127.0.0.1:8080`.
@@ -99,8 +101,9 @@ serializadores, metricas, logger, selector bloqueante y piezas de relay.
 make check PORT=12080
 ```
 
-Por que usarlo: corre `make test` y luego integracion M1-M7 contra sockets
-reales. El puerto parametrizado evita colisiones con procesos locales.
+Por que usarlo: corre `make test` y luego prueba sobre sockets reales la
+negociacion, autenticacion, conexion, relay, DNS, metricas y administracion. El
+puerto parametrizado evita colisiones con procesos locales.
 
 ```bash
 make valgrind PORT=12080
@@ -126,20 +129,18 @@ El script sube el repo a `pampero.itba.edu.ar`, excluyendo `.git`, `obj/`,
 3. `make check PORT=<puerto>`
 4. `make valgrind PORT=<puerto+1>`
 
-Salida esperada de una corrida valida: build OK, unitarios OK, integracion M1-M7
-sin fallas y Valgrind con trafico sin errores ni leaks definitivos.
+Salida esperada de una corrida valida: build y pruebas sin fallas, seguidas por
+Valgrind con trafico real sin errores ni memoria perdida definitivamente.
 
 Evidencia disponible de Pampero/Linux:
 
 - Entorno: `pampero.it.itba.edu.ar`, Linux `7.0.9-arch1-1`, GCC `16.1.1 20260625`.
 - `make clean && make`: `BUILD OK`.
-- Unitarios OK: `hello_test 21/0`, `auth_test 19/0`, `users_test 35/0`,
-  `request_test 63/0`, `connect_test 23/0`, `copy_test 17/0`,
-  `netutils_test 20/0`, `selector_block_test 17/0`, `metrics_test 16/0`,
-  `logger_test 4/0`.
-- Integracion: M1 `6 ok`, M2 `8 ok`, M3 `14 ok`, M4 `19 ok`, M5 `7 ok` con
-  `1 skip` por retry multi-IP no aplicable en ese entorno, M6 access-log OK/FAIL,
-  M7 `35 ok`.
+- Los unitarios cubrieron parsers, usuarios, conexion, relay, selector, metricas
+  y registro de accesos.
+- Las integraciones ejercitaron el flujo SOCKS5 completo, resolucion DNS,
+  reintentos, registro de accesos y operaciones PMC. El caso que requiere un
+  dominio con varias direcciones se omitio porque el entorno no lo ofrecio.
 - Valgrind + trafico: `ERROR SUMMARY: 0 errors from 0 contexts`,
   `definitely/indirectly/possibly lost: 0 bytes`, `2 fds` heredados al exit y
   `still reachable: 5,658 bytes` atribuible a libc/entorno.
@@ -189,9 +190,9 @@ Evidencia versionada:
 
 Lectura honesta de resultados:
 
-- La evidencia versionada es un smoke local macOS con concurrencias 5 y 20,
+- La evidencia versionada es una corrida local acotada en macOS con concurrencias 5 y 20,
   payloads 1024 y 8192 bytes, targets IPv4 y FQDN.
-- Hubo una prueba local ad hoc separada de 500 conexiones con `conn_ok=500` y
+- Hubo una prueba local adicional de 500 conexiones con `conn_ok=500` y
   `conn_failed=0`.
 - No se presenta un barrido completo de stress en Pampero; la evidencia Pampero
   fuerte es build, unitarios, integracion y Valgrind con trafico.

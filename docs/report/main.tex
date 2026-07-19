@@ -24,9 +24,10 @@
 \begin{abstract}
 Se desarrolló un servidor proxy SOCKS5 en C11 con I/O no bloqueante multiplexado,
 autenticación usuario/contraseña, conexión TCP saliente a IPv4, IPv6 y FQDN,
-resolución DNS fuera del hilo del selector, métricas volátiles, registro de
-accesos y un protocolo propio de monitoreo/configuración con cliente CLI. El
-alcance cubre la primera entrega; el monitoreo de credenciales POP3 queda fuera.
+resolución DNS fuera del hilo del selector, métricas, registro de accesos y un
+protocolo propio de monitoreo/configuración con cliente de terminal. El informe
+explica las decisiones de diseño, los problemas encontrados y los límites que
+surgen de la arquitectura y de las mediciones realizadas.
 \end{abstract}
 
 \tableofcontents

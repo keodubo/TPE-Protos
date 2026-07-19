@@ -1,6 +1,6 @@
 \section{Ejemplos de prueba}
 
-\begin{longtable}{p{0.34\linewidth}p{0.22\linewidth}p{0.34\linewidth}}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.32\linewidth}>{\raggedright\arraybackslash}p{0.22\linewidth}>{\raggedright\arraybackslash}p{0.36\linewidth}}
 \toprule
 \textbf{Comando} & \textbf{Estado} & \textbf{Observación} \\
 \midrule
@@ -8,15 +8,15 @@
 \texttt{bin/server} y \texttt{bin/client} sin warnings visibles. \\
 \texttt{make test} & Verificado local y Pampero & Unitarios C del parser,
 usuarios, métricas, logger, selector bloqueante y relay. \\
-\texttt{make check PORT=12080} & Verificado local y Pampero & Unitarios más
-integración M1-M7 sobre sockets reales. \\
+\texttt{make check PORT=12080} & Verificado local y Pampero & Flujos completos
+de negociación, autenticación, conexión, relay, DNS, métricas y PMC. \\
 \texttt{make valgrind PORT=...} & Verificado en Pampero & Valgrind con tráfico:
 0 errores, 0 leaks definitivos/indirectos/posibles. \\
 \texttt{strace} sobre relay HTTP & Verificado en Pampero & En ambos sentidos se
 observó \texttt{recvfrom} $\rightarrow$ \texttt{sendto} sin un
 \texttt{pselect6} intermedio. \\
-\texttt{test/stress/run\_stress.py} & Smoke local macOS & Genera CSV y figuras
-reproducibles; no reemplaza un barrido completo de capacidad en Pampero. \\
+\texttt{test/stress/run\_stress.py} & Corrida local acotada & Genera CSV y
+figuras reproducibles para las combinaciones elegidas. \\
 \bottomrule
 \end{longtable}
 
@@ -26,27 +26,17 @@ La corrida remota se ejecutó en \texttt{pampero.it.itba.edu.ar}, Linux
 \texttt{7.0.9-arch1-1}, GCC \texttt{16.1.1 20260625}. El build
 \texttt{make clean \&\& make} terminó con \texttt{BUILD OK}.
 
-Los unitarios reportaron todos los casos OK; entre los totales relevantes:
+Los unitarios reportaron todos los casos OK y cubrieron:
 \begin{itemize}[nosep]
-  \item \texttt{hello\_test 21/0}, \texttt{auth\_test 19/0},
-  \texttt{users\_test 35/0} y \texttt{request\_test 63/0};
-  \item \texttt{connect\_test 23/0}, \texttt{copy\_test 17/0} y
-  \texttt{netutils\_test 20/0};
-  \item \texttt{selector\_block\_test 17/0}, \texttt{metrics\_test 16/0} y
-  \texttt{logger\_test 4/0}.
+  \item negociación, autenticación y parseo de pedidos fragmentados;
+  \item conexión, relay bidireccional, cierres parciales y contrapresión;
+  \item notificaciones del selector, métricas y registro de accesos.
 \end{itemize}
 
-La integración M1-M7 terminó sin fallas:
-\begin{itemize}[nosep]
-  \item M1: \texttt{6 ok, 0 fallas};
-  \item M2: \texttt{8 ok, 0 fallas};
-  \item M3: \texttt{14 ok, 0 fallas};
-  \item M4: \texttt{19 ok, 0 fallas};
-  \item M5: \texttt{7 ok, 0 fallas, 1 skip}; el \texttt{skip} corresponde al
-  retry multi-IP no aplicable en ese entorno, no a una falla funcional;
-  \item M6: access-log OK y FAIL emitidos;
-  \item M7: \texttt{35 ok, 0 fallas}.
-\end{itemize}
+Las integraciones terminaron sin fallas y ejercitaron los mismos comportamientos
+sobre sockets reales. El único caso no ejecutado requería que el entorno
+resolviera un dominio a varias direcciones para forzar el reintento; esa
+precondición no estaba disponible en la corrida.
 
 Valgrind con tráfico real reportó:
 \begin{itemize}[nosep]
@@ -73,36 +63,37 @@ PMC y escribe CSV bajo un directorio de salida. Los parámetros principales son:
   de métricas PMC.
 \end{itemize}
 
-La evidencia versionada corresponde al smoke local macOS guardado en:
+La evidencia versionada corresponde a una corrida local acotada en macOS,
+guardada en:
 \begin{center}
 \texttt{docs/stress/2026-07-05\_local-smoke\_v1/}
 \end{center}
 
-Ese smoke usó concurrencias 5 y 20, payloads 1024 y 8192 bytes, targets IPv4 y
-FQDN, y una repetición por combinación. También hubo una prueba local ad hoc de
+La corrida usó concurrencias 5 y 20, payloads 1024 y 8192 bytes, destinos IPv4 y
+FQDN, y una repetición por combinación. También hubo una prueba local adicional de
 500 conexiones con \texttt{conn\_ok=500} y \texttt{conn\_failed=0}. No se
 presenta como máximo absoluto del servidor ni como barrido completo en Pampero.
 
 \IfFileExists{../stress/2026-07-05_local-smoke_v1/2026-07-05_fig-throughput-vs-concurrency_v1.png}{
-\begin{figure}[h]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=0.82\linewidth]{2026-07-05_fig-throughput-vs-concurrency_v1.png}
-  \caption{Throughput agregado del smoke local por concurrencia y modo de destino.}
+  \caption{Throughput agregado de la corrida local por concurrencia y modo de destino.}
 \end{figure}
 }{}
 
 \IfFileExists{../stress/2026-07-05_local-smoke_v1/2026-07-05_fig-error-rate-vs-concurrency_v1.png}{
-\begin{figure}[h]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=0.82\linewidth]{2026-07-05_fig-error-rate-vs-concurrency_v1.png}
-  \caption{Tasa de error del smoke local. En la corrida versionada no hubo conexiones fallidas.}
+  \caption{Tasa de error de la corrida local. No hubo conexiones fallidas.}
 \end{figure}
 }{}
 
 \IfFileExists{../stress/2026-07-05_local-smoke_v1/2026-07-05_fig-latency-p50-p95-vs-concurrency_v1.png}{
-\begin{figure}[h]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=0.82\linewidth]{2026-07-05_fig-latency-p50-p95-vs-concurrency_v1.png}
-  \caption{Latencias p50/p95 totales del smoke local.}
+  \caption{Latencias p50/p95 totales de la corrida local.}
 \end{figure}
 }{}
